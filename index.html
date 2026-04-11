@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ThreeJS Engine FPS</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #0b1020;
+            font-family: Arial, sans-serif;
+        }
+
+        canvas {
+            display: block;
+            background: transparent;
+            outline: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 100%;
+            max-height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+
+    <script type="module">
+        import RAPIER from './libs/rapier.js';
+        import * as THREE from './libs/three.module.js';
+        import { GLTFLoader } from './libs/GLTFLoader.js';
+        import { clone } from './libs/SkeletonUtils.js';
+        import { RGBELoader } from "./libs/RGBELoader.js";
+
+        import { Engine, GameScene, BoxInstance, AnimatedCharacter } from './Engine.js';
+
+        const engine = new Engine({
+            rapier: RAPIER,
+            THREE: THREE,
+            GLTFLoader: GLTFLoader,
+            RGBELoader: RGBELoader,
+            clone: clone
+        });
+
+        engine.add_texture("wood_diffuse", "./gfx/wood_diffuse.jpg");
+        engine.add_texture("wood_metal", "./gfx/wood_metal.jpg");
+        engine.add_texture("wood_normal", "./gfx/wood_normal.jpg");
+        engine.add_texture("wood_rough", "./gfx/wood_rough.jpg");
+
+        engine.add_hdri("hdri", "./gfx/day.hdr");
+
+        engine.add_model("indoraptor", "./glb/indoraptor.glb");
+        engine.add_model("henry", "./glb/henry.glb");
+
+        engine.init({
+            display_mode: 'normal_canvas'
+        }).then(() => {
+            const gameScene = engine.add_scene("game", GameScene);
+            gameScene.add_instance("box1", BoxInstance, {  
+                diffuseTexture: "wood_diffuse",
+                metalnessTexture: "wood_metal",
+                normalTexture: "wood_normal",
+                roughnessTexture: "wood_rough",
+                position: { x: 0, y: 0, z: 0 },
+                size: { x: 10, y: 0.5, z: 10 },
+                static: true
+            });
+            gameScene.add_instance("box2", BoxInstance, {   
+                diffuseTexture: "wood_diffuse",
+                metalnessTexture: "wood_metal",
+                normalTexture: "wood_normal",
+                roughnessTexture: "wood_rough",
+                position: { x: 0, y: 5, z: 0 }
+            });
+            gameScene.add_instance("box3", BoxInstance, {   
+                diffuseTexture: "wood_diffuse",
+                metalnessTexture: "wood_metal",
+                normalTexture: "wood_normal",
+                roughnessTexture: "wood_rough",
+                position: { x: 0.5, y: 6, z: 0 }
+            });
+
+            gameScene.add_instance("character", AnimatedCharacter, {
+                model: "indoraptor",
+                position: { x: 2, y: 0, z: 0 }
+            });
+            gameScene.add_instance("henry", AnimatedCharacter, {
+                model: "henry",
+                position: { x: 3, y: 0, z: 0 },
+                scale: 0.5
+            });
+
+            gameScene.get_instance("box2").duplicate(gameScene);
+            gameScene.set_hdri("hdri");
+
+            engine.set_scene("game");
+
+            engine.start();
+        });
+    </script>
+</body>
+
+</html>
