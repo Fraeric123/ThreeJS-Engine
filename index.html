@@ -39,6 +39,7 @@
         import { GLTFLoader } from './libs/GLTFLoader.js';
         import { clone } from './libs/SkeletonUtils.js';
         import { RGBELoader } from "./libs/RGBELoader.js";
+        import GUI from './libs/lilgui.js';
 
         import { Engine, GameScene, BoxInstance, AnimatedCharacter } from './Engine.js';
 
@@ -47,7 +48,8 @@
             THREE: THREE,
             GLTFLoader: GLTFLoader,
             RGBELoader: RGBELoader,
-            clone: clone
+            clone: clone,
+            gui: GUI
         });
 
         engine.add_texture("wood_diffuse", "./gfx/wood_diffuse.jpg");
@@ -64,6 +66,7 @@
             display_mode: 'normal_canvas'
         }).then(() => {
             const gameScene = engine.add_scene("game", GameScene);
+
             gameScene.add_instance("box1", BoxInstance, {  
                 diffuseTexture: "wood_diffuse",
                 metalnessTexture: "wood_metal",

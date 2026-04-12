@@ -12,11 +12,10 @@ export class Instance {
         this.rigidBody = null;
     }
 
-    sync_with_physics() {
+    sync_with_physics(alpha = 1) {
         if (!this.object3D || !this.rigidBody) return;
         const pos = this.rigidBody.translation();
         const rot = this.rigidBody.rotation();
-
         this.object3D.position.set(pos.x, pos.y, pos.z);
         this.object3D.quaternion.set(rot.x, rot.y, rot.z, rot.w);
     }
@@ -53,7 +52,7 @@ export class AnimatedCharacter extends Instance {
         this.modelName = options.model;
         this.position = options.position ?? { x: 0, y: 0, z: 0 };
         this.size = options.size ?? { x: 1, y: 1, z: 1 };
-        this.scale = options.scale ?? 1;
+        this.scale = options.scale ?? 1;        
 
         this.mixer = null;
         this.actions = new Map();
@@ -61,10 +60,29 @@ export class AnimatedCharacter extends Instance {
 
         this.radius = options.radius ?? 0.4;
         this.height = options.height ?? 1.2;
-        
+
+        this.visualOffset = new this.engine.THREE.Vector3(
+            options.offsetX ?? 0,
+            options.offsetY ?? -(this.height / 2 + this.radius),
+            options.offsetZ ?? 0
+        );
+
         this.rootDefaultPositions = new Map();
         this.rootDefaultQuaternions = new Map();
         this.currentRootAxes = { x: false, y: false, z: false, rot: false };
+    }
+
+    sync_with_physics(alpha = 1) {
+        if (!this.object3D || !this.rigidBody) return;
+        const pos = this.rigidBody.translation();
+        const rot = this.rigidBody.rotation();
+
+        this.object3D.position.set(pos.x, pos.y, pos.z);
+        this.object3D.quaternion.set(rot.x, rot.y, rot.z, rot.w);
+
+        this.object3D.position.x += this.visualOffset.x;
+        this.object3D.position.y += this.visualOffset.y;
+        this.object3D.position.z += this.visualOffset.z;
     }
 
     init() {
@@ -76,7 +94,7 @@ export class AnimatedCharacter extends Instance {
         this.object3D = this.engine.clone(asset.scene);
         this.scene.add(this.object3D);
 
-        this.object3D.scale.set(this.size.x*this.scale, this.size.y*this.scale, this.size.z*this.scale);
+        this.object3D.scale.set(this.size.x * this.scale, this.size.y * this.scale, this.size.z * this.scale);
 
         this.object3D.traverse(obj => {
             if (obj.isBone) {
@@ -87,6 +105,24 @@ export class AnimatedCharacter extends Instance {
                 }
             }
         });
+        if (this.engine.gui) {
+            const folder = this.engine.gui.addFolder(`Character: ${this.modelName}`);
+
+            folder.add(this.visualOffset, 'x', -5.0, 5.0).name('Offset X');
+            folder.add(this.visualOffset, 'y', -5.0, 5.0).name('Offset Y');
+            folder.add(this.visualOffset, 'z', -5.0, 5.0).name('Offset Z');
+
+            folder.add(this, 'scale', 0.1, 5).name('Scale').onChange(() => {
+                this.object3D.scale.set(
+                    this.size.x * this.scale,
+                    this.size.y * this.scale,
+                    this.size.z * this.scale
+                );
+            });
+        }
+
+        this.object3D.castShadow = true;
+        this.object3D.receiveShadow = true;
 
         this.mixer = new this.engine.THREE.AnimationMixer(this.object3D);
         asset.animations.forEach(clip => {
@@ -109,7 +145,7 @@ export class AnimatedCharacter extends Instance {
 
     playAnimation(name, animOptions = {}) {
         const duration = animOptions.duration ?? 0.2;
-        
+
         this.currentRootAxes = {
             x: animOptions.rootAxes?.x ?? false,
             y: animOptions.rootAxes?.y ?? false,
@@ -148,9 +184,13 @@ export class AnimatedCharacter extends Instance {
         }
 
         this.sync_with_physics();
+
         if (this.object3D) {
-            this.object3D.position.y -= (this.height / 2 + this.radius);
+            this.object3D.position.x += this.visualOffset.x;
+            this.object3D.position.y += this.visualOffset.y - (this.height / 2 + this.radius);
+            this.object3D.position.z += this.visualOffset.z;
         }
+
     }
 }
 
@@ -201,6 +241,8 @@ export class BoxInstance extends Instance {
 
 
         this.object3D = new this.engine.THREE.Mesh(geo, mat);
+        this.object3D.castShadow = true;
+        this.object3D.receiveShadow = true;
         this.scene.add(this.object3D);
 
         const rbDesc = this.static ?
@@ -242,12 +284,22 @@ export class GameScene {
 
         this.scene = new engine.THREE.Scene();
 
+        const hemisphere = new engine.THREE.HemisphereLight(0xcfe7ff, 0x4a3f2b, 0.9);
+        this.scene.add(hemisphere);
 
-        const light = new this.engine.THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(5, 10, 5);
-        this.scene.add(light);
+        const ambient = new engine.THREE.AmbientLight(0xffffff, 0.25);
+        this.scene.add(ambient);
 
-        this.scene.add(new this.engine.THREE.AmbientLight(0xffffff, 0.4));
+        const sun = new engine.THREE.DirectionalLight(0xffffff, 1.5);
+        sun.position.set(14, 22, 8);
+        sun.castShadow = true;
+        sun.shadow.mapSize.setScalar(2048);
+        sun.shadow.camera.near = 0.5;
+        sun.shadow.camera.far = 90;
+        const shadowSize = 30;
+        sun.shadow.camera.left = sun.shadow.camera.bottom = -shadowSize;
+        sun.shadow.camera.right = sun.shadow.camera.top = shadowSize;
+        this.scene.add(sun);
 
         this.camera = new engine.THREE.PerspectiveCamera(
             75,
@@ -255,6 +307,20 @@ export class GameScene {
             0.1,
             1000
         );
+
+        this.camera_speed = 1;
+
+        const camFolder = this.engine.gui.addFolder('Camera');
+        camFolder.add(this, 'camera_speed', 0.1, 2).name('Camera Speed');
+        camFolder.add(this.camera, 'near', 0.01, 100).name('Camera Near').onChange(() => this.camera.updateProjectionMatrix());
+        camFolder.add(this.camera, 'far', 0.01, 1000).name('Camera Far').onChange(() => this.camera.updateProjectionMatrix());
+        camFolder.add(this.camera, 'fov', 1, 180).name('Camera FOV').onChange(() => this.camera.updateProjectionMatrix());
+        camFolder.add(this.camera, 'zoom', 0.1, 5).name('Camera Zoom').onChange(() => this.camera.updateProjectionMatrix());
+
+        this.cameraType = "noclip";
+        this.cameraTarget = null;
+
+        this.camera.rotation.order = 'YXZ';
 
         this.listener = new engine.THREE.AudioListener();
         this.camera.add(this.listener);
@@ -264,11 +330,55 @@ export class GameScene {
 
         this.world = new engine.rapier.World({ x: 0, y: -9.81, z: 0 });
 
+        // --- DEBUG RENDERING ---
+        this.debugEnabled = true;
+        this.debugMesh = new engine.THREE.LineSegments(
+            new engine.THREE.BufferGeometry(),
+            new engine.THREE.LineBasicMaterial({ color: 0xff0000, vertexColors: false })
+        );
+        this.debugMesh.frustumCulled = false;
+        this.scene.add(this.debugMesh);
+
         this.running = true;
         this.instances = new Map();
     }
 
-    render() { }
+    render(alpha, renderDt) {
+        this.camera.rotation.y = this.engine.look.yaw;
+        this.camera.rotation.x = this.engine.look.pitch;
+
+        if (this.cameraType === "noclip") {
+            const baseSpeed = this.engine.input.sprint ? 20 : 10;
+            const speed = baseSpeed * renderDt * this.camera_speed;
+
+            const forward = new this.engine.THREE.Vector3(
+                -Math.sin(this.camera.rotation.y),
+                0,
+                -Math.cos(this.camera.rotation.y)
+            );
+            const right = new this.engine.THREE.Vector3().crossVectors(forward, this.camera.up);
+
+            if (this.engine.input.forward) this.camera.position.addScaledVector(forward, speed);
+            if (this.engine.input.back) this.camera.position.addScaledVector(forward, -speed);
+            if (this.engine.input.left) this.camera.position.addScaledVector(right, -speed);
+            if (this.engine.input.right) this.camera.position.addScaledVector(right, speed);
+            if (this.engine.input.up) this.camera.position.y += speed;
+            if (this.engine.input.crouch) this.camera.position.y -= speed;
+        }
+
+        if (this.debugEnabled) {
+            const { vertices, colors } = this.world.debugRender();
+            this.debugMesh.geometry.setAttribute('position', new this.engine.THREE.BufferAttribute(vertices, 3));
+            this.debugMesh.geometry.setAttribute('color', new this.engine.THREE.BufferAttribute(colors, 4));
+            this.debugMesh.visible = true;
+        } else {
+            this.debugMesh.visible = false;
+        }
+
+        for (const instance of this.instances.values()) {
+            instance.sync_with_physics(alpha);
+        }
+    }
 
 
     // skybox functions
@@ -313,6 +423,11 @@ export class GameScene {
     }
 
     update(dt) {
+        if (!this.running) return;
+        if (this.cameraTarget) {
+            this.camera.position.lerp(this.cameraTarget.position, 0.1);
+        }
+
         for (const instance of this.instances.values()) {
             instance.update(dt);
         }
@@ -326,13 +441,14 @@ export class GameScene {
 }
 
 export class Engine {
-    constructor({ rapier, THREE, GLTFLoader, RGBELoader, clone }) {
+    constructor({ rapier, THREE, GLTFLoader, RGBELoader, clone, gui }) {
 
         //libs
         this.rapier = rapier;
         this.THREE = THREE;
         this.RGBELoader = RGBELoader;
         this.clone = clone; // clone from SkeletonUtils
+        this.gui = new gui();
 
         // loaders
         this.textureLoader = new THREE.TextureLoader();
@@ -358,6 +474,7 @@ export class Engine {
         this.scenes = new Map();
         this.activeScene = null;
         this.renderer = null;
+        this.engine_mode = "game"; // "editor" or "game"
 
         // assets
         this.assets = {
@@ -378,6 +495,82 @@ export class Engine {
                 this.THREE.AudioContext.getContext().resume();
             }
         }, { once: true });
+
+        // input setup
+        this.input = {
+            forward: false,
+            back: false,
+            left: false,
+            right: false,
+            leanLeft: false,
+            leanRight: false,
+            sprint: false,
+            up: false,
+            crouch: false,
+            zoomHeld: false
+        };
+        this.look = {
+            yaw: 0, pitch: 0, sensitivity: 0.0022, locked: false, zoomDelta: 0
+        };
+        const setKey = (code, state) => {
+            const keyMap = {
+                'KeyW': 'forward',
+                'KeyS': 'back',
+                'KeyA': 'left',
+                'KeyD': 'right',
+                'KeyQ': 'leanLeft',
+                'KeyE': 'leanRight',
+                'ShiftLeft': 'sprint',
+                'ShiftRight': 'sprint',
+                'KeyC': 'zoomHeld',
+                'Space': 'up',
+                'ControlLeft': 'crouch',
+                'ControlRight': 'crouch'
+            };
+            if (keyMap[code]) this.input[keyMap[code]] = state;
+        };
+        window.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === "w") {
+                e.preventDefault();
+            }
+            if (e.ctrlKey && e.key === "s") {
+                e.preventDefault();
+            }
+            if (e.ctrlKey && e.key === "a") {
+                e.preventDefault();
+            }
+            if (e.ctrlKey && e.key === "d") {
+                e.preventDefault();
+            }
+            if (e.code === 'F2') {
+                e.preventDefault();
+                if (this.activeScene) {
+                    this.activeScene.debugEnabled = !this.activeScene.debugEnabled;
+                }
+            }
+            if (e.code === 'Space') {
+                e.preventDefault();
+            }
+            setKey(e.code, true);
+        });
+        window.addEventListener('beforeunload', (e) => {
+            // e.preventDefault();
+        });
+        window.addEventListener('keyup', (e) => setKey(e.code, false));
+        window.addEventListener('wheel', (e) => {
+            if (this.input.zoomHeld) {
+                this.look.zoomDelta = e.deltaY;
+            }
+        }, { passive: true });
+        document.addEventListener('mousemove', (e) => {
+            if (!this.look.locked || this.input.leanLeft || this.input.leanRight) return;
+
+            this.look.yaw -= e.movementX * this.look.sensitivity;
+            this.look.pitch -= e.movementY * this.look.sensitivity;
+            this.look.pitch = this.THREE.MathUtils.clamp(
+                this.look.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01
+            );
+        });
     }
 
 
@@ -501,6 +694,28 @@ export class Engine {
 
             this.canvas3D.style.pointerEvents = 'none';
             this.canvas2D.style.pointerEvents = 'auto';
+
+            this.canvas2D.addEventListener('click', async () => {
+                this.canvas2D.focus();
+                // this.canvas3D.requestFullscreen().catch(() => { });
+
+                if (this.THREE.AudioContext.getContext().state === 'suspended') {
+                    await this.THREE.AudioContext.getContext().resume();
+                }
+
+                try {
+                    await this.canvas2D.requestPointerLock({ unadjustedMovement: true });
+                } catch {
+                    try {
+                        await this.canvas2D.requestPointerLock();
+                    } catch (error) { }
+                }
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                this.look.locked = document.pointerLockElement === this.canvas2D;
+                console.log("Mouse locked:", this.look.locked);
+            });
 
             // canvas resize
             this.resize_canvas();
@@ -764,11 +979,11 @@ export class Engine {
         this.accumulator = 0;
 
         const loop = (time) => {
-            const dt = Math.min((time - this.lastTime) / 1000, 0.1);
+            const renderDt = (time - this.lastTime) / 1000;
+            const dt = Math.min(renderDt, 0.1);
             this.lastTime = time;
 
             this.accumulator += dt;
-
             this.fps = Math.round(this.fps * 0.9 + (1 / dt) * 0.1);
 
             while (this.accumulator >= this.fixedTimeStep) {
@@ -782,16 +997,14 @@ export class Engine {
                 this.accumulator -= this.fixedTimeStep;
             }
 
+            const alpha = this.accumulator / this.fixedTimeStep;
+
             // render updates
             this.clear2D();
             this.render_ui();
             if (this.renderer && this.activeScene) {
-                this.renderer.render(
-                    this.activeScene.scene,
-                    this.activeScene.camera
-                );
-
-                this.activeScene.render();
+                this.activeScene.render(alpha, renderDt);
+                this.renderer.render(this.activeScene.scene, this.activeScene.camera);
             }
 
             requestAnimationFrame(loop);
