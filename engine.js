@@ -52,7 +52,7 @@ export class AnimatedCharacter extends Instance {
         this.modelName = options.model;
         this.position = options.position ?? { x: 0, y: 0, z: 0 };
         this.size = options.size ?? { x: 1, y: 1, z: 1 };
-        this.scale = options.scale ?? 1;        
+        this.scale = options.scale ?? 1;
 
         this.mixer = null;
         this.actions = new Map();
@@ -309,12 +309,16 @@ export class GameScene {
         );
 
         this.camera_speed = 1;
+        this.targetZoom = 1.0;
+        this.zoomSmoothness = 0.1;
+        this.defaultFOV = 75;
+        this.targetFOV = 75;
+        this.zoomLevel = 1.0;
 
         const camFolder = this.engine.gui.addFolder('Camera');
         camFolder.add(this, 'camera_speed', 0.1, 2).name('Camera Speed');
         camFolder.add(this.camera, 'near', 0.01, 100).name('Camera Near').onChange(() => this.camera.updateProjectionMatrix());
         camFolder.add(this.camera, 'far', 0.01, 1000).name('Camera Far').onChange(() => this.camera.updateProjectionMatrix());
-        camFolder.add(this.camera, 'fov', 1, 180).name('Camera FOV').onChange(() => this.camera.updateProjectionMatrix());
         camFolder.add(this.camera, 'zoom', 0.1, 5).name('Camera Zoom').onChange(() => this.camera.updateProjectionMatrix());
 
         this.cameraType = "noclip";
@@ -344,6 +348,11 @@ export class GameScene {
     }
 
     render(alpha, renderDt) {
+        if (Math.abs(this.camera.fov - this.targetFOV) > 0.1) {
+            this.camera.fov = this.engine.THREE.MathUtils.lerp(this.camera.fov, this.targetFOV, 0.15);
+            this.camera.updateProjectionMatrix();
+        }
+
         this.camera.rotation.y = this.engine.look.yaw;
         this.camera.rotation.x = this.engine.look.pitch;
 
@@ -424,8 +433,24 @@ export class GameScene {
 
     update(dt) {
         if (!this.running) return;
+
         if (this.cameraTarget) {
             this.camera.position.lerp(this.cameraTarget.position, 0.1);
+        }
+
+        if (this.engine.input.zoomHeld) {
+            const baseZoomFOV = 20;
+            if (this.engine.look.zoomDelta !== 0) {
+                this.zoomLevel += this.engine.look.zoomDelta * 2.0;
+                this.zoomLevel = this.engine.THREE.MathUtils.clamp(this.zoomLevel, 1.0, 10.0);
+                this.engine.look.zoomDelta = 0;
+            }
+
+            this.targetFOV = baseZoomFOV / this.zoomLevel;
+        } else {
+            this.targetFOV = this.defaultFOV;
+            this.zoomLevel = 1.0;
+            this.engine.look.zoomDelta = 0;
         }
 
         for (const instance of this.instances.values()) {
@@ -559,14 +584,19 @@ export class Engine {
         window.addEventListener('keyup', (e) => setKey(e.code, false));
         window.addEventListener('wheel', (e) => {
             if (this.input.zoomHeld) {
-                this.look.zoomDelta = e.deltaY;
+                this.look.zoomDelta -= e.deltaY * 0.001;
             }
         }, { passive: true });
         document.addEventListener('mousemove', (e) => {
             if (!this.look.locked || this.input.leanLeft || this.input.leanRight) return;
+            let sens = this.look.sensitivity;
+            if (this.activeScene && this.activeScene.camera) {
+                sens *= (this.activeScene.camera.fov / 75);
+            }
 
-            this.look.yaw -= e.movementX * this.look.sensitivity;
-            this.look.pitch -= e.movementY * this.look.sensitivity;
+            this.look.yaw -= e.movementX * sens;
+            this.look.pitch -= e.movementY * sens;
+
             this.look.pitch = this.THREE.MathUtils.clamp(
                 this.look.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01
             );
