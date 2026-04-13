@@ -375,6 +375,7 @@ export class GameScene {
             if (this.engine.input.crouch) this.camera.position.y -= speed;
         }
 
+        
         if (this.debugEnabled) {
             const { vertices, colors } = this.world.debugRender();
             this.debugMesh.geometry.setAttribute('position', new this.engine.THREE.BufferAttribute(vertices, 3));
@@ -466,7 +467,7 @@ export class GameScene {
 }
 
 export class Engine {
-    constructor({ rapier, THREE, GLTFLoader, RGBELoader, clone, gui }) {
+    constructor({ rapier, THREE, GLTFLoader, RGBELoader, clone, gui, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, SSAOPass, SMAAPass }) {
 
         //libs
         this.rapier = rapier;
@@ -480,6 +481,16 @@ export class Engine {
         this.gltfLoader = new GLTFLoader();
         this.audioLoader = new THREE.AudioLoader();
         this.hdrLoader = new RGBELoader();
+
+        // postprocessing
+        this.EffectComposer = EffectComposer;
+        this.RenderPass = RenderPass;
+        this.UnrealBloomPass = UnrealBloomPass;
+        this.OutputPass = OutputPass;
+        this.BokehPass = BokehPass;
+        this.SSAOPass = SSAOPass;
+        this.SMAAPass = SMAAPass;
+
 
         // init settings
         this.display_mode = 'normal_canvas';
@@ -647,6 +658,10 @@ export class Engine {
             this.activeScene.camera.updateProjectionMatrix();
         }
 
+        if (this.composer) {
+            this.composer.setSize(this.width, this.height);
+        }
+
         this.ctx2D.setTransform(
             this.dpr * scaleX, 0,
             0, this.dpr * scaleY,
@@ -775,6 +790,7 @@ export class Engine {
 
         newScene.camera.aspect = this.width / this.height;
         newScene.camera.updateProjectionMatrix();
+        this.update_post_process();
     }
 
 
@@ -787,12 +803,64 @@ export class Engine {
     async setup_render() {
         this.renderer = new this.THREE.WebGLRenderer({
             canvas: this.canvas3D,
-            antialias: true
+            antialias: false
         });
         this.renderer.setSize(this.width, this.height, false);
         this.renderer.setPixelRatio(this.dpr);
         this.renderer.toneMapping = this.THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.0;
+        this.composer = new this.EffectComposer(this.renderer);
+    }
+
+    update_post_process() {
+        if (!this.activeScene) return;
+
+        this.composer.passes = [];
+
+        const renderPass = new this.RenderPass(this.activeScene.scene, this.activeScene.camera);
+        this.composer.addPass(renderPass);
+
+        const bokehPass = new this.BokehPass(this.activeScene.scene, this.activeScene.camera, {
+            focus: 10.0,
+            aperture: 0.025,
+            maxblur: 0.01
+        });
+        this.composer.addPass(bokehPass);
+
+        const ssaoPass = new this.SSAOPass(this.activeScene.scene, this.activeScene.camera, this.width, this.height);
+        ssaoPass.kernelRadius = 16;
+        ssaoPass.minDistance = 0.005;
+        ssaoPass.maxDistance = 0.1;
+        this.composer.addPass(ssaoPass);
+
+        const bloomPass = new this.UnrealBloomPass(
+            new this.THREE.Vector2(this.width, this.height),
+            1.5, 0.4, 0.85
+        );
+        this.composer.addPass(bloomPass);
+
+        const smaaPass = new this.SMAAPass(this.width * this.dpr, this.height * this.dpr);
+        this.composer.addPass(smaaPass);
+
+        const outputPass = new this.OutputPass();
+        this.composer.addPass(outputPass);
+
+        if (this.gui) {
+            const dofFolder = this.gui.addFolder('Depth of Field');
+            dofFolder.add(bokehPass.uniforms.focus, 'value', 0, 100, 0.1).name('Focus');
+            dofFolder.add(bokehPass.uniforms.aperture, 'value', 0, 0.1, 0.001).name('Aperture');
+            dofFolder.add(bokehPass.uniforms.maxblur, 'value', 0, 0.05, 0.001).name('Max Blur');
+
+            const bloomFolder = this.gui.addFolder('Bloom');
+            bloomFolder.add(bloomPass, 'strength', 0, 3);
+            bloomFolder.add(bloomPass, 'radius', 0, 1);
+            bloomFolder.add(bloomPass, 'threshold', 0, 1);
+
+            const ssaoFolder = this.gui.addFolder('SSAO');
+            ssaoFolder.add(ssaoPass, 'kernelRadius', 0, 3);
+            ssaoFolder.add(ssaoPass, 'minDistance', 0, 1);
+            ssaoFolder.add(ssaoPass, 'maxDistance', 0, 1);
+        }
     }
 
 
@@ -1034,7 +1102,12 @@ export class Engine {
             this.render_ui();
             if (this.renderer && this.activeScene) {
                 this.activeScene.render(alpha, renderDt);
-                this.renderer.render(this.activeScene.scene, this.activeScene.camera);
+                //this.renderer.render(this.activeScene.scene, this.activeScene.camera);
+                if (this.composer) {
+                    this.composer.render();
+                } else {
+                    this.renderer.render(this.activeScene.scene, this.activeScene.camera);
+                }
             }
 
             requestAnimationFrame(loop);

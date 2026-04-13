@@ -41,6 +41,14 @@
         import { RGBELoader } from "./libs/RGBELoader.js";
         import GUI from './libs/lilgui.js';
 
+        import { EffectComposer } from './libs/postprocessing/EffectComposer.js';
+        import { RenderPass } from './libs/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from './libs/postprocessing/UnrealBloomPass.js';
+        import { OutputPass } from './libs/postprocessing/OutputPass.js';
+        import { BokehPass } from './libs/postprocessing/BokehPass.js';
+        import { SSAOPass } from "./libs/postprocessing/SSAOPass.js";
+        import { SMAAPass } from "./libs/postprocessing/SMAAPass.js"
+
         import { Engine, GameScene, BoxInstance, AnimatedCharacter } from './Engine.js';
 
         const engine = new Engine({
@@ -49,7 +57,14 @@
             GLTFLoader: GLTFLoader,
             RGBELoader: RGBELoader,
             clone: clone,
-            gui: GUI
+            gui: GUI,
+            EffectComposer: EffectComposer,
+            RenderPass: RenderPass,
+            UnrealBloomPass: UnrealBloomPass,
+            OutputPass: OutputPass,
+            BokehPass: BokehPass,
+            SSAOPass: SSAOPass,
+            SMAAPass: SMAAPass
         });
 
         engine.add_texture("wood_diffuse", "./gfx/wood_diffuse.jpg");
@@ -67,7 +82,7 @@
         }).then(() => {
             const gameScene = engine.add_scene("game", GameScene);
 
-            gameScene.add_instance("box1", BoxInstance, {  
+            gameScene.add_instance("box1", BoxInstance, {
                 diffuseTexture: "wood_diffuse",
                 metalnessTexture: "wood_metal",
                 normalTexture: "wood_normal",
@@ -76,14 +91,14 @@
                 size: { x: 10, y: 0.5, z: 10 },
                 static: true
             });
-            gameScene.add_instance("box2", BoxInstance, {   
+            gameScene.add_instance("box2", BoxInstance, {
                 diffuseTexture: "wood_diffuse",
                 metalnessTexture: "wood_metal",
                 normalTexture: "wood_normal",
                 roughnessTexture: "wood_rough",
                 position: { x: 0, y: 5, z: 0 }
             });
-            gameScene.add_instance("box3", BoxInstance, {   
+            gameScene.add_instance("box3", BoxInstance, {
                 diffuseTexture: "wood_diffuse",
                 metalnessTexture: "wood_metal",
                 normalTexture: "wood_normal",

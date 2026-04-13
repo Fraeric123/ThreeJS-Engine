@@ -1998,7 +1998,7 @@ function warn( ...params ) {
 
 		} else {
 
-			//console.warn( message, ...params );
+			console.warn( message, ...params );
 
 		}
 
@@ -55676,12 +55676,14 @@ function intersect( object, raycaster, intersects, recursive ) {
 /**
  * Class for keeping track of time.
  *
+ * @deprecated since r183.
  */
 class Clock {
 
 	/**
 	 * Constructs a new clock.
 	 *
+	 * @deprecated since 183.
 	 * @param {boolean} [autoStart=true] - Whether to automatically start the clock when
 	 * `getDelta()` is called for the first time.
 	 */
