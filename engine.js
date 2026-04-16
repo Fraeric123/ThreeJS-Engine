@@ -459,6 +459,8 @@ export class GameScene {
 
         this.world = new engine.rapier.World({ x: 0, y: -9.81, z: 0 });
 
+        this.player = null;
+
         // --- DEBUG RENDERING ---
         this.debugEnabled = true;
         this.debugMesh = new engine.THREE.LineSegments(
@@ -510,8 +512,11 @@ export class GameScene {
         this.camera.rotation.y = this.engine.look.yaw;
         this.camera.rotation.x = this.engine.look.pitch;
 
-        if (this.engine.engine_mode === "game") {
-            const player = this.get_instance("player_controller");
+        if (!this.player) { this.player = this.get_first_instance_of_class(Player) }
+        if (!this.player) { this.player = "no-player" }
+
+        if (this.engine.engine_mode === "game" && this.player) {
+            const player = this.player;
             if (player && player.rigidBody) {
                 const pos = player.rigidBody.translation();
 
@@ -596,6 +601,15 @@ export class GameScene {
 
     get_instance(name) {
         return this.instances.get(name);
+    }
+
+    get_first_instance_of_class(instance_class) {
+        for (const instance of this.instances.values()) {
+            if (instance instanceof instance_class) {
+                return instance;
+            }
+        }
+        return null;
     }
 
 
