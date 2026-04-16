@@ -44,6 +44,101 @@ export class Instance {
     }
 }
 
+export class Player extends Instance {
+    constructor(engine, gameScene, options = {}) {
+        super(engine, gameScene);
+        this.walkSpeed = 5;
+        this.sprintSpeed = 8;
+        this.crouchSpeed = 2.5;
+        this.jumpForce = 7;
+
+        this.radius = 0.4;
+        this.standHeight = 1.2;
+        this.crouchHeight = 0.6;
+        this.bobIntensity = 0;
+
+        this.currentVisualHeight = this.standHeight;
+
+        this.isCrouching = false;
+        this.leanOffset = 0;
+        this.bobTime = 0;
+        this.isMoving = false;
+    }
+
+    init() {
+        const rbDesc = this.engine.rapier.RigidBodyDesc.dynamic()
+            .setTranslation(0, 5, 0)
+            .lockRotations()
+            .setLinearDamping(0.5);
+
+        this.rigidBody = this.world.createRigidBody(rbDesc);
+        this.createCollider(this.standHeight);
+    }
+
+    createCollider(height) {
+        if (this.collider) this.world.removeCollider(this.collider, true);
+        const colliderDesc = this.engine.rapier.ColliderDesc.capsule(height / 2, this.radius)
+            .setFriction(0.0);
+        this.collider = this.world.createCollider(colliderDesc, this.rigidBody);
+    }
+
+    update(dt) {
+        if (this.engine.engine_mode !== "game") return;
+
+        const input = this.engine.input;
+        const velocity = this.rigidBody.linvel();
+
+        if (input.crouch && !this.isCrouching) {
+            this.isCrouching = true;
+            this.createCollider(this.crouchHeight);
+        } else if (!input.crouch && this.isCrouching) {
+            this.isCrouching = false;
+            this.createCollider(this.standHeight);
+        }
+
+        const targetVisualHeight = this.isCrouching ? this.crouchHeight : this.standHeight;
+        this.currentVisualHeight = this.engine.THREE.MathUtils.lerp(
+            this.currentVisualHeight,
+            targetVisualHeight,
+            0.1
+        );
+
+        let isSprinting = input.sprint && !this.isCrouching && input.forward;
+        let currentSpeed = this.isCrouching ? this.crouchSpeed : (isSprinting ? this.sprintSpeed : this.walkSpeed);
+
+        const yaw = this.engine.look.yaw;
+        const forward = new this.engine.THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+        const right = new this.engine.THREE.Vector3().crossVectors(forward, new this.engine.THREE.Vector3(0, 1, 0));
+
+        let moveX = 0, moveZ = 0;
+        if (input.forward) { moveX += forward.x; moveZ += forward.z; }
+        if (input.back) { moveX -= forward.x; moveZ -= forward.z; }
+        if (input.left) { moveX -= right.x; moveZ -= right.z; }
+        if (input.right) { moveX += right.x; moveZ += right.z; }
+
+        const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
+        this.isMoving = length > 0.1;
+
+        if (this.isMoving) {
+            this.rigidBody.setLinvel({
+                x: (moveX / length) * currentSpeed,
+                y: velocity.y,
+                z: (moveZ / length) * currentSpeed
+            }, true);
+
+            const speedFactor = isSprinting ? 1.5 : (this.isCrouching ? 0.6 : 1.0);
+            this.bobTime += dt * currentSpeed * speedFactor;
+        } else {
+            this.rigidBody.setLinvel({ x: 0, y: velocity.y, z: 0 }, true);
+            this.bobTime += dt * this.walkSpeed;
+        }
+
+        if (input.up && Math.abs(velocity.y) < 0.05 && !this.isCrouching) {
+            this.rigidBody.applyImpulse({ x: 0, y: this.jumpForce, z: 0 }, true);
+        }
+    }
+}
+
 export class AnimatedCharacter extends Instance {
     constructor(engine, gameScene, options = {}) {
         super(engine, gameScene);
@@ -67,9 +162,11 @@ export class AnimatedCharacter extends Instance {
             options.offsetZ ?? 0
         );
 
+        this.enableRootMotion = options.enableRootMotion ?? false;
+
         this.rootDefaultPositions = new Map();
         this.rootDefaultQuaternions = new Map();
-        this.currentRootAxes = { x: false, y: false, z: false, rot: false };
+        this.currentRootAxes = { x: true, y: false, z: true, rot: true };
     }
 
     sync_with_physics(alpha = 1) {
@@ -105,21 +202,6 @@ export class AnimatedCharacter extends Instance {
                 }
             }
         });
-        if (this.engine.gui) {
-            const folder = this.engine.gui.addFolder(`Character: ${this.modelName}`);
-
-            folder.add(this.visualOffset, 'x', -5.0, 5.0).name('Offset X');
-            folder.add(this.visualOffset, 'y', -5.0, 5.0).name('Offset Y');
-            folder.add(this.visualOffset, 'z', -5.0, 5.0).name('Offset Z');
-
-            folder.add(this, 'scale', 0.1, 5).name('Scale').onChange(() => {
-                this.object3D.scale.set(
-                    this.size.x * this.scale,
-                    this.size.y * this.scale,
-                    this.size.z * this.scale
-                );
-            });
-        }
 
         this.object3D.castShadow = true;
         this.object3D.receiveShadow = true;
@@ -133,6 +215,48 @@ export class AnimatedCharacter extends Instance {
         console.log("Available animations:", Array.from(this.actions.keys()));
 
         this.playAnimation(this.options.defaultAnimation ?? asset.animations[29]?.name);
+
+        if (this.engine.gui) {
+            if (!this.engine.charFolder) {
+                this.engine.charFolder = this.engine.gui.addFolder("Characters");
+                this.engine.charFolder.close();
+            }
+            const folder = this.engine.charFolder.addFolder(this.modelName);
+            folder.close();
+
+            const animationNames = Array.from(this.actions.keys());
+            if (animationNames.length > 0) {
+                const animSettings = {
+                    current: this.currentAction ? this.currentAction.getClip().name : animationNames[0]
+                };
+
+                folder.add(animSettings, 'current', animationNames)
+                    .name('Animation')
+                    .onChange((name) => {
+                        this.playAnimation(name);
+                    });
+            }
+
+            folder.add(this, 'enableRootMotion').name('Enable Root Motion');
+            const axisFolder = folder.addFolder('Root Motion Axes');
+            axisFolder.add(this.currentRootAxes, 'x').name('Allow X (Side)');
+            axisFolder.add(this.currentRootAxes, 'y').name('Allow Y (Up)');
+            axisFolder.add(this.currentRootAxes, 'z').name('Allow Z (Forward)');
+            axisFolder.add(this.currentRootAxes, 'rot').name('Allow Rotation');
+            axisFolder.close();
+
+            folder.add(this.visualOffset, 'x', -5.0, 5.0).name('Offset X');
+            folder.add(this.visualOffset, 'y', -5.0, 5.0).name('Offset Y');
+            folder.add(this.visualOffset, 'z', -5.0, 5.0).name('Offset Z');
+
+            folder.add(this, 'scale', 0.1, 5).name('Scale').onChange(() => {
+                this.object3D.scale.set(
+                    this.size.x * this.scale,
+                    this.size.y * this.scale,
+                    this.size.z * this.scale
+                );
+            });
+        }
 
         const rbDesc = this.engine.rapier.RigidBodyDesc.dynamic()
             .setTranslation(this.position.x, this.position.y, this.position.z)
@@ -166,21 +290,21 @@ export class AnimatedCharacter extends Instance {
         if (this.mixer) {
             this.mixer.update(dt);
 
-            this.object3D.traverse(obj => {
-                if (obj.isBone && this.rootDefaultPositions.has(obj.uuid)) {
-                    const defaultPos = this.rootDefaultPositions.get(obj.uuid);
-                    const axes = this.currentRootAxes;
-
-                    if (!axes.x) obj.position.x = defaultPos.x;
-                    if (!axes.y) obj.position.y = defaultPos.y;
-                    if (!axes.z) obj.position.z = defaultPos.z;
-
-                    if (!axes.rot) {
+            if (!this.enableRootMotion) {
+                this.object3D.traverse(obj => {
+                    if (obj.isBone && this.rootDefaultPositions.has(obj.uuid)) {
+                        const defaultPos = this.rootDefaultPositions.get(obj.uuid);
                         const defaultQuat = this.rootDefaultQuaternions.get(obj.uuid);
-                        obj.quaternion.copy(defaultQuat);
+                        const axes = this.currentRootAxes;
+
+                        // Pokud osa není explicitně povolena v animaci, vynutíme výchozí pozici
+                        if (!axes.x) obj.position.x = defaultPos.x;
+                        if (!axes.y) obj.position.y = defaultPos.y;
+                        if (!axes.z) obj.position.z = defaultPos.z;
+                        if (!axes.rot) obj.quaternion.copy(defaultQuat);
                     }
-                }
-            });
+                });
+            }
         }
 
         this.sync_with_physics();
@@ -320,6 +444,7 @@ export class GameScene {
         camFolder.add(this.camera, 'near', 0.01, 100).name('Camera Near').onChange(() => this.camera.updateProjectionMatrix());
         camFolder.add(this.camera, 'far', 0.01, 1000).name('Camera Far').onChange(() => this.camera.updateProjectionMatrix());
         camFolder.add(this.camera, 'zoom', 0.1, 5).name('Camera Zoom').onChange(() => this.camera.updateProjectionMatrix());
+        camFolder.close();
 
         this.cameraType = "noclip";
         this.cameraTarget = null;
@@ -348,6 +473,35 @@ export class GameScene {
     }
 
     render(alpha, renderDt) {
+        const raycaster = new this.engine.THREE.Raycaster();
+        raycaster.setFromCamera(this.engine.mouse, this.camera);
+
+        const intersects = raycaster.intersectObjects(this.scene.children, true);
+
+        if (intersects.length > 0) {
+            const hit = intersects[0];
+
+            if (this.bokehPass) {
+                this.bokehPass.uniforms.focus.value = this.engine.THREE.MathUtils.lerp(
+                    this.bokehPass.uniforms.focus.value,
+                    hit.distance,
+                    0.1
+                );
+            }
+
+            let targetObject = hit.object;
+            while (targetObject.parent && targetObject.parent !== this.scene) {
+                targetObject = targetObject.parent;
+            }
+
+            if (this.engine.outlinePass) {
+                this.engine.outlinePass.selectedObjects = [targetObject];
+            }
+        } else {
+            if (this.engine.outlinePass) {
+                this.engine.outlinePass.selectedObjects = [];
+            }
+        }
         if (Math.abs(this.camera.fov - this.targetFOV) > 0.1) {
             this.camera.fov = this.engine.THREE.MathUtils.lerp(this.camera.fov, this.targetFOV, 0.15);
             this.camera.updateProjectionMatrix();
@@ -356,7 +510,28 @@ export class GameScene {
         this.camera.rotation.y = this.engine.look.yaw;
         this.camera.rotation.x = this.engine.look.pitch;
 
-        if (this.cameraType === "noclip") {
+        if (this.engine.engine_mode === "game") {
+            const player = this.get_instance("player_controller");
+            if (player && player.rigidBody) {
+                const pos = player.rigidBody.translation();
+
+                let bobX = Math.cos(player.bobTime * 0.5) * 0.05 * player.bobIntensity;
+                let bobY = Math.sin(player.bobTime) * 0.08 * player.bobIntensity;
+                let bobZ = 0;
+
+                const leanVisualOffset = player.leanOffset * 0.4;
+                const yaw = this.engine.look.yaw;
+
+                this.camera.position.set(
+                    pos.x + bobX + (Math.cos(yaw) * leanVisualOffset),
+                    pos.y + (player.currentVisualHeight * 0.5) + bobY,
+                    pos.z + (Math.sin(yaw) * leanVisualOffset)
+                );
+
+                this.camera.rotation.z = player.leanOffset * 0.05;
+            }
+        } else {
+            this.camera.rotation.z = 0;
             const baseSpeed = this.engine.input.sprint ? 20 : 10;
             const speed = baseSpeed * renderDt * this.camera_speed;
 
@@ -375,7 +550,7 @@ export class GameScene {
             if (this.engine.input.crouch) this.camera.position.y -= speed;
         }
 
-        
+
         if (this.debugEnabled) {
             const { vertices, colors } = this.world.debugRender();
             this.debugMesh.geometry.setAttribute('position', new this.engine.THREE.BufferAttribute(vertices, 3));
@@ -467,7 +642,7 @@ export class GameScene {
 }
 
 export class Engine {
-    constructor({ rapier, THREE, GLTFLoader, RGBELoader, clone, gui, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, SSAOPass, SMAAPass }) {
+    constructor({ rapier, THREE, GLTFLoader, RGBELoader, clone, gui, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, SSAOPass, SMAAPass, OutlinePass }) {
 
         //libs
         this.rapier = rapier;
@@ -490,6 +665,7 @@ export class Engine {
         this.BokehPass = BokehPass;
         this.SSAOPass = SSAOPass;
         this.SMAAPass = SMAAPass;
+        this.OutlinePass = OutlinePass;
 
 
         // init settings
@@ -511,6 +687,7 @@ export class Engine {
         this.activeScene = null;
         this.renderer = null;
         this.engine_mode = "game"; // "editor" or "game"
+        this.mouse = new this.THREE.Vector2();
 
         // assets
         this.assets = {
@@ -584,6 +761,15 @@ export class Engine {
                     this.activeScene.debugEnabled = !this.activeScene.debugEnabled;
                 }
             }
+            if (e.code === 'F4') {
+                e.preventDefault();
+                this.engine_mode = this.engine_mode === "game" ? "editor" : "game";
+                console.log("Režim změněn na:", this.engine_mode);
+
+                if (this.engine_mode === "game") {
+                    this.canvas2D.requestPointerLock();
+                }
+            }
             if (e.code === 'Space') {
                 e.preventDefault();
             }
@@ -599,19 +785,25 @@ export class Engine {
             }
         }, { passive: true });
         document.addEventListener('mousemove', (e) => {
-            if (!this.look.locked || this.input.leanLeft || this.input.leanRight) return;
-            let sens = this.look.sensitivity;
-            if (this.activeScene && this.activeScene.camera) {
-                sens *= (this.activeScene.camera.fov / 75);
+            if (!this.look.locked) {
+                const rect = this.canvas2D.getBoundingClientRect();
+                this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+                this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            } else {
+                let sens = this.look.sensitivity;
+                if (this.activeScene && this.activeScene.camera) {
+                    sens *= (this.activeScene.camera.fov / 75);
+                }
+
+                this.look.yaw -= e.movementX * sens;
+                this.look.pitch -= e.movementY * sens;
+
+                this.look.pitch = this.THREE.MathUtils.clamp(
+                    this.look.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01
+                );
             }
-
-            this.look.yaw -= e.movementX * sens;
-            this.look.pitch -= e.movementY * sens;
-
-            this.look.pitch = this.THREE.MathUtils.clamp(
-                this.look.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01
-            );
-        });
+        }
+        );
     }
 
 
@@ -820,12 +1012,13 @@ export class Engine {
         const renderPass = new this.RenderPass(this.activeScene.scene, this.activeScene.camera);
         this.composer.addPass(renderPass);
 
-        const bokehPass = new this.BokehPass(this.activeScene.scene, this.activeScene.camera, {
+        this.activeScene.bokehPass = new this.BokehPass(this.activeScene.scene, this.activeScene.camera, {
             focus: 10.0,
-            aperture: 0.025,
-            maxblur: 0.01
+            aperture: 0.001,
+            maxblur: 0.001
         });
-        this.composer.addPass(bokehPass);
+        this.composer.addPass(this.activeScene.bokehPass);
+        const bokehPass = this.activeScene.bokehPass
 
         const ssaoPass = new this.SSAOPass(this.activeScene.scene, this.activeScene.camera, this.width, this.height);
         ssaoPass.kernelRadius = 16;
@@ -839,6 +1032,20 @@ export class Engine {
         );
         this.composer.addPass(bloomPass);
 
+        this.outlinePass = new this.OutlinePass(
+            new this.THREE.Vector2(this.width * this.dpr, this.height * this.dpr), // Přidáno * this.dpr
+            this.activeScene.scene,
+            this.activeScene.camera
+        );
+
+        this.outlinePass.edgeStrength = 3.0;
+        this.outlinePass.edgeGlow = 1.0;
+        this.outlinePass.edgeThickness = 1.0;
+        this.outlinePass.visibleEdgeColor.set('#ffffff');
+        this.outlinePass.hiddenEdgeColor.set('#ffffff');
+
+        this.composer.addPass(this.outlinePass);
+
         const smaaPass = new this.SMAAPass(this.width * this.dpr, this.height * this.dpr);
         this.composer.addPass(smaaPass);
 
@@ -846,20 +1053,36 @@ export class Engine {
         this.composer.addPass(outputPass);
 
         if (this.gui) {
-            const dofFolder = this.gui.addFolder('Depth of Field');
-            dofFolder.add(bokehPass.uniforms.focus, 'value', 0, 100, 0.1).name('Focus');
-            dofFolder.add(bokehPass.uniforms.aperture, 'value', 0, 0.1, 0.001).name('Aperture');
-            dofFolder.add(bokehPass.uniforms.maxblur, 'value', 0, 0.05, 0.001).name('Max Blur');
+            const posteffectFolder = this.gui.addFolder('PostEffects');
+            posteffectFolder.close();
 
-            const bloomFolder = this.gui.addFolder('Bloom');
+            const bloomFolder = posteffectFolder.addFolder('Bloom');
             bloomFolder.add(bloomPass, 'strength', 0, 3);
             bloomFolder.add(bloomPass, 'radius', 0, 1);
             bloomFolder.add(bloomPass, 'threshold', 0, 1);
+            bloomFolder.close();
 
-            const ssaoFolder = this.gui.addFolder('SSAO');
-            ssaoFolder.add(ssaoPass, 'kernelRadius', 0, 3);
-            ssaoFolder.add(ssaoPass, 'minDistance', 0, 1);
-            ssaoFolder.add(ssaoPass, 'maxDistance', 0, 1);
+            const outlineFolder = posteffectFolder.addFolder('Outline');
+            outlineFolder.add(this.outlinePass, 'edgeStrength', 0, 10);
+            outlineFolder.add(this.outlinePass, 'edgeThickness', 0, 4);
+            outlineFolder.add(this.outlinePass, 'edgeGlow', 0, 2);
+            const params = {
+                edgeColor: this.outlinePass.visibleEdgeColor.getHex()
+            };
+            outlineFolder.addColor(params, 'edgeColor')
+                .name('Outline Color')
+                .onChange((value) => {
+                    this.outlinePass.visibleEdgeColor.set(value);
+                });
+            const params2 = {
+                hedgeColor: this.outlinePass.hiddenEdgeColor.getHex()
+            };
+            outlineFolder.addColor(params2, 'hedgeColor')
+                .name('hOutline Color')
+                .onChange((value) => {
+                    this.outlinePass.hiddenEdgeColor.set(value);
+                });
+            outlineFolder.close();
         }
     }
 

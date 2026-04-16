@@ -47,9 +47,10 @@
         import { OutputPass } from './libs/postprocessing/OutputPass.js';
         import { BokehPass } from './libs/postprocessing/BokehPass.js';
         import { SSAOPass } from "./libs/postprocessing/SSAOPass.js";
-        import { SMAAPass } from "./libs/postprocessing/SMAAPass.js"
+        import { SMAAPass } from "./libs/postprocessing/SMAAPass.js";
+        import { OutlinePass } from "./libs/postprocessing/OutlinePass.js";
 
-        import { Engine, GameScene, BoxInstance, AnimatedCharacter } from './Engine.js';
+        import { Engine, GameScene, Player, BoxInstance, AnimatedCharacter } from './Engine.js';
 
         const engine = new Engine({
             rapier: RAPIER,
@@ -64,7 +65,8 @@
             OutputPass: OutputPass,
             BokehPass: BokehPass,
             SSAOPass: SSAOPass,
-            SMAAPass: SMAAPass
+            SMAAPass: SMAAPass,
+            OutlinePass: OutlinePass
         });
 
         engine.add_texture("wood_diffuse", "./gfx/wood_diffuse.jpg");
@@ -81,6 +83,8 @@
             display_mode: 'normal_canvas'
         }).then(() => {
             const gameScene = engine.add_scene("game", GameScene);
+
+            gameScene.add_instance("player", Player);
 
             gameScene.add_instance("box1", BoxInstance, {
                 diffuseTexture: "wood_diffuse",
