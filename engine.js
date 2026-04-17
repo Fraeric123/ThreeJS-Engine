@@ -44,6 +44,10 @@ export class Instance {
     }
 }
 
+
+
+
+
 export class Player extends Instance {
     constructor(engine, gameScene, options = {}) {
         super(engine, gameScene);
@@ -138,6 +142,11 @@ export class Player extends Instance {
         }
     }
 }
+
+
+
+
+
 
 export class AnimatedCharacter extends Instance {
     constructor(engine, gameScene, options = {}) {
@@ -318,6 +327,12 @@ export class AnimatedCharacter extends Instance {
     }
 }
 
+
+
+
+
+
+
 export class BoxInstance extends Instance {
     constructor(engine, gameScene, options = {}) {
         super(engine, gameScene);
@@ -401,6 +416,11 @@ export class BoxInstance extends Instance {
         }
     }
 }
+
+
+
+
+
 
 export class GameScene {
     constructor(engine) {
@@ -654,6 +674,11 @@ export class GameScene {
         }
     }
 }
+
+
+
+
+
 
 export class Engine {
     constructor({ rapier, THREE, GLTFLoader, RGBELoader, clone, gui, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, SSAOPass, SMAAPass, OutlinePass }) {
@@ -1026,25 +1051,9 @@ export class Engine {
         const renderPass = new this.RenderPass(this.activeScene.scene, this.activeScene.camera);
         this.composer.addPass(renderPass);
 
-        this.activeScene.bokehPass = new this.BokehPass(this.activeScene.scene, this.activeScene.camera, {
-            focus: 10.0,
-            aperture: 0.001,
-            maxblur: 0.001
-        });
-        this.composer.addPass(this.activeScene.bokehPass);
-        const bokehPass = this.activeScene.bokehPass
+        
 
-        const ssaoPass = new this.SSAOPass(this.activeScene.scene, this.activeScene.camera, this.width, this.height);
-        ssaoPass.kernelRadius = 16;
-        ssaoPass.minDistance = 0.005;
-        ssaoPass.maxDistance = 0.1;
-        this.composer.addPass(ssaoPass);
-
-        const bloomPass = new this.UnrealBloomPass(
-            new this.THREE.Vector2(this.width, this.height),
-            1.5, 0.4, 0.85
-        );
-        this.composer.addPass(bloomPass);
+        
 
         this.outlinePass = new this.OutlinePass(
             new this.THREE.Vector2(this.width * this.dpr, this.height * this.dpr), // Přidáno * this.dpr
@@ -1052,13 +1061,32 @@ export class Engine {
             this.activeScene.camera
         );
 
-        this.outlinePass.edgeStrength = 3.0;
-        this.outlinePass.edgeGlow = 1.0;
-        this.outlinePass.edgeThickness = 1.0;
-        this.outlinePass.visibleEdgeColor.set('#ffffff');
-        this.outlinePass.hiddenEdgeColor.set('#ffffff');
+        this.outlinePass.edgeStrength = 3;
+        this.outlinePass.edgeGlow = 1.2;
+        this.outlinePass.edgeThickness = 1;
+        this.outlinePass.visibleEdgeColor.set('#37ff00');
+        this.outlinePass.hiddenEdgeColor.set('#000000');
 
         this.composer.addPass(this.outlinePass);
+
+        const bloomPass = new this.UnrealBloomPass(
+            new this.THREE.Vector2(this.width, this.height),
+            0.5, 0.1, 1
+        );
+        this.composer.addPass(bloomPass);
+
+        this.activeScene.bokehPass = new this.BokehPass(this.activeScene.scene, this.activeScene.camera, {
+            focus: 10.0,
+            aperture: 0.001,
+            maxblur: 0
+        });
+        this.composer.addPass(this.activeScene.bokehPass);
+
+        const ssaoPass = new this.SSAOPass(this.activeScene.scene, this.activeScene.camera, this.width, this.height);
+        ssaoPass.kernelRadius = 16;
+        ssaoPass.minDistance = 0.005;
+        ssaoPass.maxDistance = 0.1;
+        this.composer.addPass(ssaoPass);
 
         const smaaPass = new this.SMAAPass(this.width * this.dpr, this.height * this.dpr);
         this.composer.addPass(smaaPass);
@@ -1077,7 +1105,7 @@ export class Engine {
             bloomFolder.close();
 
             const outlineFolder = posteffectFolder.addFolder('Outline');
-            outlineFolder.add(this.outlinePass, 'edgeStrength', 0, 10);
+            outlineFolder.add(this.outlinePass, 'edgeStrength', 0, 100);
             outlineFolder.add(this.outlinePass, 'edgeThickness', 0, 4);
             outlineFolder.add(this.outlinePass, 'edgeGlow', 0, 2);
             const params = {
