@@ -508,6 +508,8 @@ export class GameScene {
         this.debugMesh.frustumCulled = false;
         this.scene.add(this.debugMesh);
 
+        this.raycaster = new engine.THREE.Raycaster();
+
         this.running = true;
         this.instances = new Map();
     }
@@ -563,17 +565,10 @@ export class GameScene {
             instance.sync_with_physics(alpha);
         }
 
-        const raycaster = new this.engine.THREE.Raycaster();
         this.scene.updateMatrixWorld(true);
 
-        if (this.engine.look.locked) {
-            raycaster.setFromCamera({ x: 0, y: 0 }, this.camera);
-        } else {
-            raycaster.setFromCamera(this.engine.mouse, this.camera);
-        }
-
-
-        const intersects = raycaster.intersectObjects(this.scene.children, true);
+        this.raycaster.setFromCamera(this.engine.look.locked ? { x: 0, y: 0 } : this.engine.mouse, this.camera);
+        const intersects = this.raycaster.intersectObjects(this.scene.children, true);
 
         if (intersects.length > 0) {
             const hit = intersects[0];
@@ -711,7 +706,7 @@ export class GameScene {
 
 
 export class Engine {
-    constructor({ rapier, THREE, GLTFLoader, RGBELoader, clone, gui, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, SSAOPass, SMAAPass, OutlinePass }) {
+    constructor({ rapier, THREE, Stats, GLTFLoader, RGBELoader, clone, gui, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, SSAOPass, SMAAPass, OutlinePass }) {
 
         //libs
         this.rapier = rapier;
@@ -768,6 +763,17 @@ export class Engine {
         this.loadingContainer = null;
         this.loadingBar = null;
         this.statusText = null;
+
+        // stats init
+        this.stats = new Stats();
+        this.stats.showPanel(0);
+        const statsDom = this.stats.dom;
+        statsDom.style.position = 'fixed';
+        statsDom.style.top = '0px';
+        statsDom.style.left = '0px';
+        statsDom.style.zIndex = '100000';
+        statsDom.style.display = 'block';
+        document.body.appendChild(statsDom);
 
         // event listeners
         window.addEventListener('resize', () => this.resize_canvas());
@@ -1370,6 +1376,8 @@ export class Engine {
         this.accumulator = 0;
 
         const loop = (time) => {
+            this.stats.begin();
+
             const renderDt = (time - this.lastTime) / 1000;
             const dt = Math.min(renderDt, 0.1);
             this.lastTime = time;
@@ -1402,6 +1410,8 @@ export class Engine {
                     this.renderer.render(this.activeScene.scene, this.activeScene.camera);
                 }
             }
+
+            this.stats.end();
 
             requestAnimationFrame(loop);
         };

@@ -16,18 +16,6 @@
             background: #0b1020;
             font-family: Arial, sans-serif;
         }
-
-        canvas {
-            display: block;
-            background: transparent;
-            outline: none;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            max-width: 100%;
-            max-height: 100%;
-        }
     </style>
 </head>
 
@@ -36,6 +24,7 @@
     <script type="module">
         import RAPIER from './libs/rapier.js';
         import * as THREE from './libs/three.module.js';
+        import Stats from './libs/stats.module.js';
         import { GLTFLoader } from './libs/GLTFLoader.js';
         import { clone } from './libs/SkeletonUtils.js';
         import { RGBELoader } from "./libs/RGBELoader.js";
@@ -66,7 +55,8 @@
             BokehPass: BokehPass,
             SSAOPass: SSAOPass,
             SMAAPass: SMAAPass,
-            OutlinePass: OutlinePass
+            OutlinePass: OutlinePass,
+            Stats: Stats
         });
 
         engine.add_texture("wood_diffuse", "./gfx/wood_diffuse.jpg");
@@ -85,7 +75,7 @@
             const gameScene = engine.add_scene("game", GameScene);
 
             gameScene.add_instance("player", Player, {
-                position: { x: 0, y: 1, z: 0 }
+                position: { x: 0, y: 0, z: 0 }
             });
 
             gameScene.add_instance("box1", BoxInstance, {
@@ -93,7 +83,7 @@
                 metalnessTexture: "wood_metal",
                 normalTexture: "wood_normal",
                 roughnessTexture: "wood_rough",
-                position: { x: 0, y: 0, z: 0 },
+                position: { x: 0, y: -1, z: 0 },
                 size: { x: 10, y: 0.5, z: 10 },
                 static: true
             });
@@ -114,9 +104,10 @@
 
             gameScene.add_instance("character", AnimatedCharacter, {
                 model: "indoraptor",
-                position: { x: 2, y: 0, z: 0 }
+                position: { x: 2, y: 0, z: 0 },
+                offsetZ: -0.5
             });
-            
+
             gameScene.add_instance("henry", AnimatedCharacter, {
                 model: "henry",
                 position: { x: 3, y: 0, z: 0 },
