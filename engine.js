@@ -233,11 +233,11 @@ export class AnimatedCharacter extends Instance {
         this.playAnimation(this.options.defaultAnimation ?? asset.animations[29]?.name);
 
         if (this.engine.gui) {
-            if (!this.engine.charFolder) {
-                this.engine.charFolder = this.engine.gui.addFolder("Characters");
-                this.engine.charFolder.close();
+            if (!this.scene.charFolder) {
+                this.scene.charFolder = this.engine.gui.addFolder("Characters");
+                this.scene.charFolder.close();
             }
-            const folder = this.engine.charFolder.addFolder(this.modelName);
+            const folder = this.scene.charFolder.addFolder(this.modelName);
             folder.close();
 
             const animationNames = Array.from(this.actions.keys());
@@ -477,7 +477,10 @@ export class GameScene {
         this.targetFOV = 75;
         this.zoomLevel = 1.0;
 
-        const camFolder = this.engine.gui.addFolder('Camera');
+        this.sceneFolder = this.engine.gui.addFolder('Scene');
+        this.sceneFolder.close();
+
+        const camFolder = this.sceneFolder.addFolder('Camera');
         camFolder.add(this, 'camera_speed', 0.1, 2).name('Camera Speed');
         camFolder.add(this.camera, 'near', 0.01, 100).name('Camera Near').onChange(() => this.camera.updateProjectionMatrix());
         camFolder.add(this.camera, 'far', 0.01, 1000).name('Camera Far').onChange(() => this.camera.updateProjectionMatrix());
@@ -501,6 +504,7 @@ export class GameScene {
 
         // --- DEBUG RENDERING ---
         this.debugEnabled = true;
+        this.sceneFolder.add(this, 'debugEnabled').name('Debug render');
         this.debugMesh = new engine.THREE.LineSegments(
             new engine.THREE.BufferGeometry(),
             new engine.THREE.LineBasicMaterial({ color: 0xff0000, vertexColors: false })
@@ -569,7 +573,7 @@ export class GameScene {
 
         this.raycaster.setFromCamera(this.engine.look.locked ? { x: 0, y: 0 } : this.engine.mouse, this.camera);
         const intersects = this.raycaster.intersectObjects(this.scene.children, true);
-
+        
         if (intersects.length > 0) {
             const hit = intersects[0];
 
@@ -878,6 +882,222 @@ export class Engine {
                 );
             }
         });
+
+        this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (this.isMobile) {
+            this.createMobileInterface();
+        }
+    }
+
+
+    // touch controlls
+
+    createMobileInterface() {
+        const mobileUI = document.createElement('div');
+        mobileUI.id = 'mobileInterface';
+        Object.assign(mobileUI.style, {
+            position: 'fixed',
+            top: '0px',
+            left: '0px',
+            width: '100%',
+            height: '100%',
+            zIndex: '1000',
+            pointerEvents: 'none',
+            userSelect: 'none',
+            webkitUserSelect: 'none',
+            touchAction: 'none'
+        });
+
+        const leftZone = document.createElement('div');
+        Object.assign(leftZone.style, {
+            position: 'absolute',
+            bottom: '20px',
+            left: '20px',
+            width: '150px',
+            height: '150px',
+            pointerEvents: 'auto'
+        });
+
+        const joyWrapper = document.createElement('div');
+        Object.assign(joyWrapper.style, {
+            width: '120px',
+            height: '120px',
+            background: 'rgba(255, 255, 255, 0.1)',
+            borderRadius: '50%',
+            position: 'relative'
+        });
+
+        const joyKnob = document.createElement('div');
+        Object.assign(joyKnob.style, {
+            width: '50px',
+            height: '50px',
+            background: 'rgba(255, 255, 255, 0.4)',
+            borderRadius: '50%',
+            position: 'absolute',
+            top: '35px',
+            left: '35px'
+        });
+
+        joyWrapper.appendChild(joyKnob);
+        leftZone.appendChild(joyWrapper);
+
+        const rightZone = document.createElement('div');
+        Object.assign(rightZone.style, {
+            position: 'absolute',
+            top: '0px',
+            right: '0px',
+            width: '50%',
+            height: '100%',
+            pointerEvents: 'auto'
+        });
+
+        const jumpBtn = document.createElement('div');
+        jumpBtn.innerHTML = '<p style="color:white; margin:0; font-weight:bold; font-size:12px;">JUMP</p>';
+        Object.assign(jumpBtn.style, {
+            position: 'absolute',
+            bottom: '40px',
+            right: '40px',
+            width: '80px',
+            height: '80px',
+            background: 'rgba(255, 255, 255, 0.15)',
+            borderRadius: '50%',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            border: '1px solid rgba(255,255,255,0.2)'
+        });
+
+        rightZone.appendChild(jumpBtn);
+        mobileUI.appendChild(leftZone);
+        mobileUI.appendChild(rightZone);
+        document.body.appendChild(mobileUI);
+
+        this.setupJoystickLogic(joyWrapper, joyKnob);
+        this.setupTouchLookLogic(rightZone);
+        this.setupJumpLogic(jumpBtn);
+    }
+
+    setupTouchLookLogic(zone) {
+        let lookTouchId = null;
+        let lastTouchX = 0;
+        let lastTouchY = 0;
+
+        zone.addEventListener('touchstart', (e) => {
+            if (e.target.closest('p') || e.target.style.borderRadius === '50%') return;
+
+            if (lookTouchId === null) {
+                const touch = e.changedTouches[0];
+                lookTouchId = touch.identifier;
+                lastTouchX = touch.clientX;
+                lastTouchY = touch.clientY;
+            }
+        }, { passive: false });
+
+        zone.addEventListener('touchmove', (e) => {
+            // Najdeme dotyk patřící kameře
+            const touch = Array.from(e.touches).find(t => t.identifier === lookTouchId);
+            if (!touch) return;
+
+            e.preventDefault();
+
+            const movementX = touch.clientX - lastTouchX;
+            const movementY = touch.clientY - lastTouchY;
+
+            lastTouchX = touch.clientX;
+            lastTouchY = touch.clientY;
+
+            let sens = this.look.sensitivity * 2.5;
+            if (this.activeScene && this.activeScene.camera) {
+                sens *= (this.activeScene.camera.fov / 75);
+            }
+
+            this.look.yaw -= movementX * sens;
+            this.look.pitch -= movementY * sens;
+
+            this.look.pitch = this.THREE.MathUtils.clamp(
+                this.look.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01
+            );
+
+            this.look.locked = true;
+        }, { passive: false });
+
+        zone.addEventListener('touchend', (e) => {
+            const touchEnded = Array.from(e.changedTouches).some(t => t.identifier === lookTouchId);
+            if (touchEnded) lookTouchId = null;
+        });
+
+        zone.addEventListener('touchcancel', (e) => {
+            const touchEnded = Array.from(e.changedTouches).some(t => t.identifier === lookTouchId);
+            if (touchEnded) lookTouchId = null;
+        });
+    }
+
+    setupJoystickLogic(wrapper, knob) {
+        const rect = wrapper.getBoundingClientRect();
+        const center = { x: rect.width / 2, y: rect.height / 2 };
+        const maxRadius = rect.width / 2;
+        let joystickTouchId = null;
+
+        const handleTouch = (e) => {
+            e.preventDefault();
+
+            let touch;
+            if (joystickTouchId === null) {
+                touch = e.changedTouches[0];
+                joystickTouchId = touch.identifier;
+            } else {
+                touch = Array.from(e.touches).find(t => t.identifier === joystickTouchId);
+            }
+
+            if (!touch) return;
+
+            const x = touch.clientX - rect.left - center.x;
+            const y = touch.clientY - rect.top - center.y;
+
+            const dist = Math.sqrt(x * x + y * y);
+            const force = Math.min(dist, maxRadius);
+            const angle = Math.atan2(y, x);
+
+            const moveX = Math.cos(angle) * force;
+            const moveY = Math.sin(angle) * force;
+
+            knob.style.transform = `translate(${moveX}px, ${moveY}px)`;
+
+            const normX = moveX / maxRadius;
+            const normY = moveY / maxRadius;
+
+            this.input.left = normX < -0.3;
+            this.input.right = normX > 0.3;
+            this.input.forward = normY < -0.3;
+            this.input.back = normY > 0.3;
+        };
+
+        const resetJoy = (e) => {
+            const touchEnded = Array.from(e.changedTouches).some(t => t.identifier === joystickTouchId);
+            if (!touchEnded) return;
+
+            joystickTouchId = null;
+            knob.style.transform = `translate(0px, 0px)`;
+            this.input.forward = false;
+            this.input.back = false;
+            this.input.left = false;
+            this.input.right = false;
+        };
+
+        wrapper.addEventListener('touchstart', handleTouch, { passive: false });
+        wrapper.addEventListener('touchmove', handleTouch, { passive: false });
+        wrapper.addEventListener('touchend', resetJoy);
+        wrapper.addEventListener('touchcancel', resetJoy);
+    }
+
+    setupJumpLogic(btn) {
+        btn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            this.input.up = true;
+        });
+        btn.addEventListener('touchend', () => {
+            this.input.up = false;
+        });
     }
 
 
@@ -1007,6 +1227,7 @@ export class Engine {
             this.canvas2D.style.pointerEvents = 'auto';
 
             this.canvas2D.addEventListener('click', async () => {
+                if (this.isMobile) return;
                 this.canvas2D.focus();
                 // this.canvas3D.requestFullscreen().catch(() => { });
 
@@ -1024,6 +1245,7 @@ export class Engine {
             });
 
             document.addEventListener('pointerlockchange', () => {
+                if (this.isMobile) return;
                 this.look.locked = document.pointerLockElement === this.canvas2D;
                 console.log("Mouse locked:", this.look.locked);
             });
@@ -1367,7 +1589,6 @@ export class Engine {
         await this.load_assets();
         await this.setup_render();
         await this.rapier.init();
-
     }
 
     start() {
