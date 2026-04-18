@@ -519,6 +519,16 @@ export class GameScene {
     }
 
     render(alpha, renderDt) {
+
+        if (this.engine.outlinePass) {
+            const time = performance.now() * 0.007;
+            const pulse = 4.0 + Math.sin(time) * 1.0;
+            
+            this.engine.outlinePass.edgeStrength = pulse;
+            this.engine.outlinePass.edgeGlow = 0.5 + Math.sin(time) * 0.2;
+            this.engine.outlinePass.edgeThickness = 1.0;
+        }
+
         this.camera.rotation.y = this.engine.look.yaw;
         this.camera.rotation.x = this.engine.look.pitch;
 
@@ -573,7 +583,7 @@ export class GameScene {
 
         this.raycaster.setFromCamera(this.engine.look.locked ? { x: 0, y: 0 } : this.engine.mouse, this.camera);
         const intersects = this.raycaster.intersectObjects(this.scene.children, true);
-        
+
         if (intersects.length > 0) {
             const hit = intersects[0];
 
