@@ -84,7 +84,9 @@
         }).then(() => {
             const gameScene = engine.add_scene("game", GameScene);
 
-            gameScene.add_instance("player", Player);
+            gameScene.add_instance("player", Player, {
+                position: { x: 0, y: 1, z: 0 }
+            });
 
             gameScene.add_instance("box1", BoxInstance, {
                 diffuseTexture: "wood_diffuse",
@@ -114,6 +116,7 @@
                 model: "indoraptor",
                 position: { x: 2, y: 0, z: 0 }
             });
+            
             gameScene.add_instance("henry", AnimatedCharacter, {
                 model: "henry",
                 position: { x: 3, y: 0, z: 0 },
