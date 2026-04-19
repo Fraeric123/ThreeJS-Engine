@@ -30,14 +30,15 @@
         import { RGBELoader } from "./libs/RGBELoader.js";
         import GUI from './libs/lilgui.js';
 
+        import { ShaderPass } from "./libs/postprocessing/ShaderPass.js";
         import { EffectComposer } from './libs/postprocessing/EffectComposer.js';
         import { RenderPass } from './libs/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from './libs/postprocessing/UnrealBloomPass.js';
         import { OutputPass } from './libs/postprocessing/OutputPass.js';
         import { BokehPass } from './libs/postprocessing/BokehPass.js';
-        import { SSAOPass } from "./libs/postprocessing/SSAOPass.js";
+        import { GTAOPass } from './libs/postprocessing/GTAOPass.js';
         import { SMAAPass } from "./libs/postprocessing/SMAAPass.js";
-        import { OutlinePass } from "./libs/postprocessing/OutlinePass.js";
+        import { OutlinePass } from "./libs/postprocessing/OutlinePass.js";        
 
         import { Engine, GameScene, Player, BoxInstance, AnimatedCharacter } from './Engine.js';
 
@@ -48,12 +49,13 @@
             RGBELoader: RGBELoader,
             clone: clone,
             gui: GUI,
+            ShaderPass,
             EffectComposer: EffectComposer,
             RenderPass: RenderPass,
             UnrealBloomPass: UnrealBloomPass,
             OutputPass: OutputPass,
             BokehPass: BokehPass,
-            SSAOPass: SSAOPass,
+            GTAOPass: GTAOPass,
             SMAAPass: SMAAPass,
             OutlinePass: OutlinePass,
             Stats: Stats
@@ -115,7 +117,7 @@
             });
 
             gameScene.get_instance("box2").duplicate(gameScene);
-            gameScene.set_hdri("hdri", 0.8);
+            gameScene.set_hdri("hdri", 1);
 
             engine.set_scene("game");
 

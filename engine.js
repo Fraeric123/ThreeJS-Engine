@@ -210,6 +210,10 @@ export class AnimatedCharacter extends Instance {
         this.object3D.scale.set(this.size.x * this.scale, this.size.y * this.scale, this.size.z * this.scale);
 
         this.object3D.traverse(obj => {
+            if (obj.isMesh) {
+                obj.castShadow = true;
+                obj.receiveShadow = true;
+            }
             if (obj.isBone) {
                 const name = obj.name.toLowerCase();
                 if (name.includes('root') || name.includes('hips') || name.includes('pelvis')) {
@@ -218,9 +222,6 @@ export class AnimatedCharacter extends Instance {
                 }
             }
         });
-
-        this.object3D.castShadow = true;
-        this.object3D.receiveShadow = true;
 
         this.mixer = new this.engine.THREE.AnimationMixer(this.object3D);
         asset.animations.forEach(clip => {
@@ -452,7 +453,7 @@ export class GameScene {
         const ambient = new engine.THREE.AmbientLight(0xffffff, 0.25);
         this.scene.add(ambient);
 
-        const sun = new engine.THREE.DirectionalLight(0xffffff, 1.5);
+        const sun = new engine.THREE.DirectionalLight(0xffffff, 8);
         sun.position.set(14, 22, 8);
         sun.castShadow = true;
         sun.shadow.mapSize.setScalar(2048);
@@ -462,6 +463,35 @@ export class GameScene {
         sun.shadow.camera.left = sun.shadow.camera.bottom = -shadowSize;
         sun.shadow.camera.right = sun.shadow.camera.top = shadowSize;
         this.scene.add(sun);
+        this.sun = sun;
+
+        this.sceneFolder = this.engine.gui.addFolder('Scene');
+        this.sceneFolder.close();
+
+        const sunFolder = this.sceneFolder.addFolder('Sun / Directional Light');
+
+        const helper = new this.engine.THREE.CameraHelper(sun.shadow.camera);
+        this.scene.add(helper);
+        helper.visible = false;
+        sunFolder.add(helper, 'visible').name('Show Shadow Box');
+
+        sunFolder.add(sun, 'intensity', 0, 50).name('Intensity');
+        const sunColor = { color: sun.color.getHex() };
+        sunFolder.addColor(sunColor, 'color').name('Color').onChange((val) => sun.color.set(val));
+
+        sunFolder.add(sun.position, 'x', -50, 50).name('Position X');
+        sunFolder.add(sun.position, 'y', 0, 50).name('Position Y');
+        sunFolder.add(sun.position, 'z', -50, 50).name('Position Z');
+
+        const shadowFolder = sunFolder.addFolder('Shadow Camera');
+        shadowFolder.add(sun.shadow.camera, 'left', -100, 0).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        shadowFolder.add(sun.shadow.camera, 'right', 0, 100).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        shadowFolder.add(sun.shadow.camera, 'top', 0, 100).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        shadowFolder.add(sun.shadow.camera, 'bottom', -100, 0).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        shadowFolder.add(sun.shadow, 'bias', -0.01, 0.01).step(0.0001).name('Shadow Bias');
+        shadowFolder.close();
+
+        sunFolder.close();
 
         this.camera = new engine.THREE.PerspectiveCamera(
             75,
@@ -476,9 +506,6 @@ export class GameScene {
         this.defaultFOV = 75;
         this.targetFOV = 75;
         this.zoomLevel = 1.0;
-
-        this.sceneFolder = this.engine.gui.addFolder('Scene');
-        this.sceneFolder.close();
 
         const camFolder = this.sceneFolder.addFolder('Camera');
         camFolder.add(this, 'camera_speed', 0.1, 2).name('Camera Speed');
@@ -513,17 +540,20 @@ export class GameScene {
         this.scene.add(this.debugMesh);
 
         this.raycaster = new engine.THREE.Raycaster();
+        this.raycasting = true;
+        this.raycastTimer = 0;
+
+        this.sceneFolder.add(this, 'raycasting', 0.1, 2).name('Raycasted target outline');
 
         this.running = true;
         this.instances = new Map();
     }
 
     render(alpha, renderDt) {
-
         if (this.engine.outlinePass) {
             const time = performance.now() * 0.007;
             const pulse = 4.0 + Math.sin(time) * 1.0;
-            
+
             this.engine.outlinePass.edgeStrength = pulse;
             this.engine.outlinePass.edgeGlow = 0.5 + Math.sin(time) * 0.2;
             this.engine.outlinePass.edgeThickness = 1.0;
@@ -581,37 +611,46 @@ export class GameScene {
 
         this.scene.updateMatrixWorld(true);
 
-        this.raycaster.setFromCamera(this.engine.look.locked ? { x: 0, y: 0 } : this.engine.mouse, this.camera);
-        const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+        this.raycastTimer += renderDt;
 
-        if (intersects.length > 0) {
-            const hit = intersects[0];
+        if (this.raycastTimer > 0.05 && this.raycasting) {
+            this.raycastTimer = 0;
 
-            if (this.bokehPass) {
-                this.bokehPass.uniforms.focus.value = this.engine.THREE.MathUtils.lerp(
-                    this.bokehPass.uniforms.focus.value,
-                    hit.distance,
-                    0.1
-                );
+            this.raycaster.setFromCamera(this.engine.look.locked ? { x: 0, y: 0 } : this.engine.mouse, this.camera);
+
+            const targetableObjects = [];
+            for (const instance of this.instances.values()) {
+                if (instance.object3D) targetableObjects.push(instance.object3D);
             }
 
-            let targetObject = hit.object;
-            while (targetObject.parent && targetObject.parent !== this.scene) {
-                targetObject = targetObject.parent;
-            }
+            const intersects = this.raycaster.intersectObjects(targetableObjects, true);
 
-            if (this.engine.outlinePass) {
-                this.engine.outlinePass.selectedObjects = [targetObject];
-            }
-        } else {
-            if (this.engine.outlinePass) {
-                this.engine.outlinePass.selectedObjects = [];
+            if (intersects.length > 0) {
+                let object = intersects[0].object;
+
+                let rootObject = object;
+                while (rootObject.parent && !rootObject.userData.instanceId) {
+                    rootObject = rootObject.parent;
+                }
+
+                if (this.engine.outlinePass) {
+                    this.engine.outlinePass.selectedObjects = [rootObject];
+                }
+
+                this.engine.canvas3D.style.cursor = 'pointer';
+            } else {
+                if (this.engine.outlinePass) {
+                    this.engine.outlinePass.selectedObjects = [];
+                }
+                this.engine.canvas3D.style.cursor = 'default';
             }
         }
+
         if (Math.abs(this.camera.fov - this.targetFOV) > 0.1) {
             this.camera.fov = this.engine.THREE.MathUtils.lerp(this.camera.fov, this.targetFOV, 0.15);
             this.camera.updateProjectionMatrix();
         }
+        
         if (this.debugEnabled) {
             const { vertices, colors } = this.world.debugRender();
             this.debugMesh.geometry.setAttribute('position', new this.engine.THREE.BufferAttribute(vertices, 3));
@@ -647,6 +686,7 @@ export class GameScene {
         const instance = new InstanceClass(this.engine, this, params);
         this.instances.set(name, instance);
         instance.init();
+        if (instance.object3D) instance.object3D.userData.instanceId = name;
         return instance;
     }
 
@@ -720,7 +760,7 @@ export class GameScene {
 
 
 export class Engine {
-    constructor({ rapier, THREE, Stats, GLTFLoader, RGBELoader, clone, gui, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, SSAOPass, SMAAPass, OutlinePass }) {
+    constructor({ rapier, THREE, Stats, GLTFLoader, RGBELoader, clone, gui, ShaderPass, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, GTAOPass, SMAAPass, OutlinePass }) {
 
         //libs
         this.rapier = rapier;
@@ -736,12 +776,13 @@ export class Engine {
         this.hdrLoader = new RGBELoader();
 
         // postprocessing
+        this.ShaderPass = ShaderPass;
         this.EffectComposer = EffectComposer;
         this.RenderPass = RenderPass;
         this.UnrealBloomPass = UnrealBloomPass;
         this.OutputPass = OutputPass;
         this.BokehPass = BokehPass;
-        this.SSAOPass = SSAOPass;
+        this.GTAOPass = GTAOPass;
         this.SMAAPass = SMAAPass;
         this.OutlinePass = OutlinePass;
 
@@ -1306,6 +1347,8 @@ export class Engine {
         this.renderer.setPixelRatio(this.dpr);
         this.renderer.toneMapping = this.THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.0;
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = this.THREE.PCFSoftShadowMap;
         this.composer = new this.EffectComposer(this.renderer);
     }
 
@@ -1314,15 +1357,32 @@ export class Engine {
 
         this.composer.passes = [];
 
+        // Main render
         const renderPass = new this.RenderPass(this.activeScene.scene, this.activeScene.camera);
         this.composer.addPass(renderPass);
 
+
+        // GTAO Shadows
+        this.gtaoPass = new this.GTAOPass(
+            this.activeScene.scene,
+            this.activeScene.camera,
+            this.width,
+            this.height
+        );
+        this.gtaoPass.output = this.GTAOPass.OUTPUT.Default;
+        this.gtaoPass.intensity = 1.0;
+        this.gtaoPass.radius = 0.5;
+        this.gtaoPass.distanceExponent = 1.5;
+        this.gtaoPass.samples = 32;
+        this.composer.addPass(this.gtaoPass);
+
+
+        // Outline
         this.outlinePass = new this.OutlinePass(
             new this.THREE.Vector2(this.width * this.dpr, this.height * this.dpr), // Přidáno * this.dpr
             this.activeScene.scene,
             this.activeScene.camera
         );
-
         this.outlinePass.edgeStrength = 3;
         this.outlinePass.edgeGlow = 1.2;
         this.outlinePass.edgeThickness = 1;
@@ -1331,15 +1391,15 @@ export class Engine {
         this.outlinePass.renderToScreen = true;
         this.outlinePass.usePatternTexture = false;
         this.outlinePass.overlayMaterial.blending = this.THREE.AdditiveBlending;
-
         this.composer.addPass(this.outlinePass);
 
+
+        // Bloom
         const bloomPass = new this.UnrealBloomPass(
             new this.THREE.Vector2(this.width, this.height),
             0.1, 0.1, 1
         );
         this.composer.addPass(bloomPass);
-
         this.activeScene.bokehPass = new this.BokehPass(this.activeScene.scene, this.activeScene.camera, {
             focus: 10.0,
             aperture: 0.001,
@@ -1347,15 +1407,13 @@ export class Engine {
         });
         this.composer.addPass(this.activeScene.bokehPass);
 
-        const ssaoPass = new this.SSAOPass(this.activeScene.scene, this.activeScene.camera, this.width, this.height);
-        ssaoPass.kernelRadius = 16;
-        ssaoPass.minDistance = 0.005;
-        ssaoPass.maxDistance = 0.1;
-        this.composer.addPass(ssaoPass);
 
+        // SMAA
         const smaaPass = new this.SMAAPass(this.width * this.dpr, this.height * this.dpr);
         this.composer.addPass(smaaPass);
 
+
+        // Final
         const outputPass = new this.OutputPass();
         this.composer.addPass(outputPass);
 
@@ -1368,6 +1426,13 @@ export class Engine {
             bloomFolder.add(bloomPass, 'radius', 0, 1);
             bloomFolder.add(bloomPass, 'threshold', 0, 1);
             bloomFolder.close();
+
+            const gtaoFolder = posteffectFolder.addFolder('GTAO Shadows');
+            gtaoFolder.add(this.gtaoPass, 'intensity', 0, 4).name('Intensity');
+            gtaoFolder.add(this.gtaoPass, 'radius', 0, 5).name('Radius');
+            gtaoFolder.add(this.gtaoPass, 'distanceExponent', 1, 4).name('Distance exponent');
+            gtaoFolder.add(this.gtaoPass, 'samples', 8, 64, 1).name('Samples');
+            gtaoFolder.close();
 
             const outlineFolder = posteffectFolder.addFolder('Outline');
             outlineFolder.add(this.outlinePass, 'edgeStrength', 0, 100);
