@@ -287,10 +287,10 @@ export class AnimatedCharacter extends Instance {
         const duration = animOptions.duration ?? 0.2;
 
         this.currentRootAxes = {
-            x: animOptions.rootAxes?.x ?? false,
-            y: animOptions.rootAxes?.y ?? false,
-            z: animOptions.rootAxes?.z ?? false,
-            rot: animOptions.rootAxes?.rot ?? false
+            x: animOptions.rootAxes?.x ?? this.currentRootAxes.x,
+            y: animOptions.rootAxes?.y ?? this.currentRootAxes.y,
+            z: animOptions.rootAxes?.z ?? this.currentRootAxes.z,
+            rot: animOptions.rootAxes?.rot ?? this.currentRootAxes.rot
         };
 
         const newAction = this.actions.get(name);
@@ -1004,7 +1004,6 @@ export class Engine {
         }, { passive: false });
 
         zone.addEventListener('touchmove', (e) => {
-            // Najdeme dotyk patřící kameře
             const touch = Array.from(e.touches).find(t => t.identifier === lookTouchId);
             if (!touch) return;
 
@@ -1337,7 +1336,7 @@ export class Engine {
 
         const bloomPass = new this.UnrealBloomPass(
             new this.THREE.Vector2(this.width, this.height),
-            0.5, 0.1, 1
+            0.1, 0.1, 1
         );
         this.composer.addPass(bloomPass);
 
