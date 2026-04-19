@@ -2,11 +2,15 @@
 
 
 export class Instance {
-    constructor(engine, gameScene) {
+    constructor(engine, gameScene, options = {}) {
         this.engine = engine;
         this.gameScene = gameScene;
         this.scene = gameScene.scene;
         this.world = gameScene.world;
+
+        this.onInit = options.onInit || null;
+        this.onUpdate = options.onUpdate || null;
+        this.onDestroy = options.onDestroy || null;
 
         this.object3D = null;
         this.rigidBody = null;
@@ -20,8 +24,12 @@ export class Instance {
         this.object3D.quaternion.set(rot.x, rot.y, rot.z, rot.w);
     }
 
-    init() { }
-    update(dt) { }
+    init() {
+        if (this.onInit) this.onInit(this);
+    }
+    update(dt) {
+        if (this.onUpdate) this.onUpdate(this, dt);
+    }
 
     duplicate(gameScene, newOptions = {}) {
         const mergedOptions = { ...this.options, ...newOptions };
@@ -32,6 +40,8 @@ export class Instance {
     }
 
     destroy() {
+        if (this.onDestroy) this.onDestroy(this);
+
         if (this.rigidBody) {
             this.world.removeRigidBody(this.rigidBody);
             this.rigidBody = null;
@@ -83,13 +93,15 @@ export class Player extends Instance {
             .setLinearDamping(0.5);
 
         this.rigidBody = this.world.createRigidBody(rbDesc);
+        this.rigidBody.userData = { instance: this };
         this.createCollider(this.standHeight);
     }
 
     createCollider(height) {
         if (this.collider) this.world.removeCollider(this.collider, true);
         const colliderDesc = this.engine.rapier.ColliderDesc.capsule(height / 2, this.radius)
-            .setFriction(0.0);
+            .setFriction(0.0)
+            .setActiveEvents(this.engine.rapier.ActiveEvents.COLLISION_EVENTS);
         this.collider = this.world.createCollider(colliderDesc, this.rigidBody);
     }
 
@@ -280,7 +292,9 @@ export class AnimatedCharacter extends Instance {
             .lockRotations();
 
         this.rigidBody = this.world.createRigidBody(rbDesc);
-        const colliderDesc = this.engine.rapier.ColliderDesc.capsule(this.height / 2, this.radius);
+        this.rigidBody.userData = { instance: this };
+        const colliderDesc = this.engine.rapier.ColliderDesc.capsule(this.height / 2, this.radius)
+            .setActiveEvents(this.engine.rapier.ActiveEvents.COLLISION_EVENTS);
         this.world.createCollider(colliderDesc, this.rigidBody);
     }
 
@@ -367,6 +381,9 @@ export class BoxInstance extends Instance {
         this.allowSleep = options.allowSleep ?? true;
         this.sleeping = options.sleeping ?? false;
 
+        // callbacks
+        this.onCollide = options.onCollide || null;
+
         // texturing
         this.color = options.color ?? null;
         this.diffuseTexture = options.diffuseTexture ?? null;
@@ -416,6 +433,8 @@ export class BoxInstance extends Instance {
 
         this.rigidBody = this.world.createRigidBody(rbDesc);
 
+        this.rigidBody.userData = { instance: this };
+
         const collider = this.engine.rapier.ColliderDesc.cuboid(
             this.size.x / 2,
             this.size.y / 2,
@@ -423,7 +442,8 @@ export class BoxInstance extends Instance {
         )
             .setFriction(this.friction)
             .setRestitution(this.restitution)
-            .setDensity(this.density);
+            .setDensity(this.density)
+            .setActiveEvents(this.engine.rapier.ActiveEvents.COLLISION_EVENTS);
 
         this.world.createCollider(collider, this.rigidBody);
     }
@@ -526,6 +546,7 @@ export class GameScene {
         this.camera.lookAt(0, 0, 0);
 
         this.world = new engine.rapier.World({ x: 0, y: -9.81, z: 0 });
+        this.eventQueue = new engine.rapier.EventQueue();
 
         this.player = null;
 
@@ -543,7 +564,7 @@ export class GameScene {
         this.raycasting = true;
         this.raycastTimer = 0;
 
-        this.sceneFolder.add(this, 'raycasting', 0.1, 2).name('Raycasted target outline');
+        this.sceneFolder.add(this, 'raycasting').name('Raycasted target outline');
 
         this.running = true;
         this.instances = new Map();
@@ -650,7 +671,7 @@ export class GameScene {
             this.camera.fov = this.engine.THREE.MathUtils.lerp(this.camera.fov, this.targetFOV, 0.15);
             this.camera.updateProjectionMatrix();
         }
-        
+
         if (this.debugEnabled) {
             const { vertices, colors } = this.world.debugRender();
             this.debugMesh.geometry.setAttribute('position', new this.engine.THREE.BufferAttribute(vertices, 3));
@@ -677,6 +698,37 @@ export class GameScene {
 
     set_camera_position(x, y, z) {
         this.camera.position.set(x, y, z);
+    }
+
+
+    // physics management
+
+    handleCollision(h1, h2) {
+        const col1 = this.world.getCollider(h1);
+        const col2 = this.world.getCollider(h2);
+        if (!col1 || !col2) return;
+
+        const body1 = col1.parent();
+        const body2 = col2.parent();
+        const inst1 = body1?.userData?.instance;
+        const inst2 = body2?.userData?.instance;
+        if (!inst1 || !inst2) return;
+
+        const v1 = body1.linvel();
+        const v2 = body2.linvel();
+
+        const impactForce = Math.sqrt(
+            Math.pow(v1.x - v2.x, 2) +
+            Math.pow(v1.y - v2.y, 2) +
+            Math.pow(v1.z - v2.z, 2)
+        );
+
+        if (inst1.onCollide) {
+            inst1.onCollide(inst1, inst2, impactForce);
+        }
+        if (inst2.onCollide) {
+            inst2.onCollide(inst2, inst1, impactForce);
+        }
     }
 
 
@@ -741,6 +793,13 @@ export class GameScene {
             this.zoomLevel = 1.0;
             this.engine.look.zoomDelta = 0;
         }
+        this.world.step(this.eventQueue);
+
+        this.eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+            if (started) {
+                this.handleCollision(handle1, handle2);
+            }
+        });
 
         for (const instance of this.instances.values()) {
             instance.update(dt);
@@ -760,7 +819,7 @@ export class GameScene {
 
 
 export class Engine {
-    constructor({ rapier, THREE, Stats, GLTFLoader, RGBELoader, clone, gui, ShaderPass, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, GTAOPass, SMAAPass, OutlinePass }) {
+    constructor({ rapier, THREE, Stats, GLTFLoader, RGBELoader, clone, gui, ShaderPass, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, BokehPass, GTAOPass, SMAAPass, OutlinePass, TAARenderPass }) {
 
         //libs
         this.rapier = rapier;
@@ -785,7 +844,7 @@ export class Engine {
         this.GTAOPass = GTAOPass;
         this.SMAAPass = SMAAPass;
         this.OutlinePass = OutlinePass;
-
+        this.TAARenderPass = TAARenderPass;
 
         // init settings
         this.display_mode = 'normal_canvas';
@@ -1348,7 +1407,7 @@ export class Engine {
         this.renderer.toneMapping = this.THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.0;
         this.renderer.shadowMap.enabled = true;
-        this.renderer.shadowMap.type = this.THREE.PCFSoftShadowMap;
+        this.renderer.shadowMap.type = this.THREE.PCFShadowMap;
         this.composer = new this.EffectComposer(this.renderer);
     }
 
@@ -1375,6 +1434,13 @@ export class Engine {
         this.gtaoPass.distanceExponent = 1.5;
         this.gtaoPass.samples = 32;
         this.composer.addPass(this.gtaoPass);
+
+
+        // TAA
+        const taaPass = new this.TAARenderPass(this.activeScene.scene, this.activeScene.camera);
+        taaPass.unbiased = true;
+        taaPass.sampleLevel = 2;
+        this.composer.addPass(taaPass);
 
 
         // Outline
@@ -1405,7 +1471,7 @@ export class Engine {
             aperture: 0.001,
             maxblur: 0
         });
-        this.composer.addPass(this.activeScene.bokehPass);
+        this.composer.addPass(this.activeScene.bokehPass);       
 
 
         // SMAA
@@ -1684,7 +1750,6 @@ export class Engine {
 
                 // physics and game logic updates
                 if (this.activeScene && this.activeScene.world) {
-                    this.activeScene.world.step();
                     this.activeScene.update(this.fixedTimeStep);
                 }
 

@@ -27,24 +27,26 @@
         import Stats from './libs/stats.module.js';
         import { GLTFLoader } from './libs/GLTFLoader.js';
         import { clone } from './libs/SkeletonUtils.js';
-        import { RGBELoader } from "./libs/RGBELoader.js";
+        import { RGBELoader } from './libs/RGBELoader.js';
         import GUI from './libs/lilgui.js';
 
-        import { ShaderPass } from "./libs/postprocessing/ShaderPass.js";
+        import { ShaderPass } from './libs/postprocessing/ShaderPass.js';
         import { EffectComposer } from './libs/postprocessing/EffectComposer.js';
         import { RenderPass } from './libs/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from './libs/postprocessing/UnrealBloomPass.js';
         import { OutputPass } from './libs/postprocessing/OutputPass.js';
         import { BokehPass } from './libs/postprocessing/BokehPass.js';
         import { GTAOPass } from './libs/postprocessing/GTAOPass.js';
-        import { SMAAPass } from "./libs/postprocessing/SMAAPass.js";
-        import { OutlinePass } from "./libs/postprocessing/OutlinePass.js";        
+        import { SMAAPass } from './libs/postprocessing/SMAAPass.js';
+        import { OutlinePass } from './libs/postprocessing/OutlinePass.js';
+        import { TAARenderPass } from './libs/postprocessing/TAARenderPass.js';
 
         import { Engine, GameScene, Player, BoxInstance, AnimatedCharacter } from './Engine.js';
 
         const engine = new Engine({
             rapier: RAPIER,
             THREE: THREE,
+            Stats: Stats,
             GLTFLoader: GLTFLoader,
             RGBELoader: RGBELoader,
             clone: clone,
@@ -58,7 +60,7 @@
             GTAOPass: GTAOPass,
             SMAAPass: SMAAPass,
             OutlinePass: OutlinePass,
-            Stats: Stats
+            TAARenderPass: TAARenderPass
         });
 
         engine.add_texture("wood_diffuse", "./gfx/wood_diffuse.jpg");
@@ -94,14 +96,12 @@
                 metalnessTexture: "wood_metal",
                 normalTexture: "wood_normal",
                 roughnessTexture: "wood_rough",
-                position: { x: 0, y: 5, z: 0 }
-            });
-            gameScene.add_instance("box3", BoxInstance, {
-                diffuseTexture: "wood_diffuse",
-                metalnessTexture: "wood_metal",
-                normalTexture: "wood_normal",
-                roughnessTexture: "wood_rough",
-                position: { x: 0.5, y: 6, z: 0 }
+                position: { x: 0, y: 5, z: 0 },
+
+                onCollide: (self, other, force) => {
+                    console.log("Force: " + force);
+                    //self.object3D.material.color.set(0x00ff00);
+                }
             });
 
             gameScene.add_instance("character", AnimatedCharacter, {
@@ -116,7 +116,6 @@
                 scale: 0.5
             });
 
-            gameScene.get_instance("box2").duplicate(gameScene);
             gameScene.set_hdri("hdri", 1);
 
             engine.set_scene("game");
