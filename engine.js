@@ -1471,7 +1471,7 @@ export class Engine {
             aperture: 0.001,
             maxblur: 0
         });
-        this.composer.addPass(this.activeScene.bokehPass);       
+        this.composer.addPass(this.activeScene.bokehPass);
 
 
         // SMAA
@@ -1499,6 +1499,19 @@ export class Engine {
             gtaoFolder.add(this.gtaoPass, 'distanceExponent', 1, 4).name('Distance exponent');
             gtaoFolder.add(this.gtaoPass, 'samples', 8, 64, 1).name('Samples');
             gtaoFolder.close();
+
+            const taaFolder = posteffectFolder.addFolder('TAA (Anti-aliasing)');
+            taaFolder.add(taaPass, 'enabled').name('Enabled');
+            taaFolder.add(taaPass, 'sampleLevel', {
+                'Level 0 (Off)': 0,
+                'Level 1': 1,
+                'Level 2': 2,
+                'Level 3': 3,
+                'Level 4': 4,
+                'Level 5': 5
+            }).name('Sample Level');
+            taaFolder.add(taaPass, 'unbiased').name('Unbiased Accumulation');
+            taaFolder.close();
 
             const outlineFolder = posteffectFolder.addFolder('Outline');
             outlineFolder.add(this.outlinePass, 'edgeStrength', 0, 100);
