@@ -1,6 +1,16 @@
 
 
 
+
+export const DEG2RAD = Math.PI / 180;
+
+
+export const generateRandomHexColor = () => {
+    const randomColor = Math.floor(Math.random() * 16777215).toString(16);
+    return "#" + randomColor.padStart(6, '0');
+};
+
+
 export class Instance {
     constructor(engine, gameScene, options = {}) {
         this.engine = engine;
@@ -27,6 +37,7 @@ export class Instance {
     init() {
         if (this.onInit) this.onInit(this);
     }
+
     update(dt) {
         if (this.onUpdate) this.onUpdate(this, dt);
     }
@@ -58,12 +69,143 @@ export class Instance {
 
 
 
+
+export class BasicModelInstance extends Instance {
+    constructor(engine, gameScene, options = {}) {
+        super(engine, gameScene);
+        this.options = options;
+        this.modelName = options.model;
+        this.position = options.position ?? { x: 0, y: 0, z: 0 };
+        this.rotation = {
+            x: (options.rotation?.x ?? 0) * (DEG2RAD),
+            y: (options.rotation?.y ?? 0) * (DEG2RAD),
+            z: (options.rotation?.z ?? 0) * (DEG2RAD)
+        };
+        this.scale = options.scale ?? 1;
+        this.static = options.static ?? false;
+        this.friction = options.friction ?? 0.5;
+        this.restitution = options.restitution ?? 0.1;
+        this.colliderType = options.colliderType ?? "box";
+    }
+
+    init() {
+        if (this.object3D) return;
+
+        const asset = this.engine.get_model(this.modelName);
+        if (!asset) return;
+
+        this.object3D = this.engine.clone(asset.scene);
+        
+        this.object3D.scale.setScalar(this.scale);
+        this.object3D.position.set(0, 0, 0);
+        this.object3D.rotation.set(0, 0, 0);
+        this.object3D.updateMatrixWorld(true);
+
+        this.object3D.traverse(child => {
+            if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+            }
+        });
+
+        let colDesc;
+        let colOffset = { x: 0, y: 0, z: 0 };
+
+        if (this.colliderType === "shape_from_model") {
+            const vertices = [];
+            const indices = [];
+
+            this.object3D.traverse(child => {
+                if (child.isMesh) {
+                    const geometry = child.geometry;
+                    const posAttr = geometry.attributes.position;
+                    const indexAttr = geometry.index;
+                    const startIdx = vertices.length / 3;
+
+                    for (let i = 0; i < posAttr.count; i++) {
+                        const v = new this.engine.THREE.Vector3().fromBufferAttribute(posAttr, i);
+                        v.applyMatrix4(child.matrixWorld);
+                        vertices.push(v.x, v.y, v.z);
+                    }
+
+                    if (indexAttr) {
+                        for (let i = 0; i < indexAttr.count; i++) {
+                            indices.push(indexAttr.getX(i) + startIdx);
+                        }
+                    } else {
+                        for (let i = 0; i < posAttr.count; i++) {
+                            indices.push(i + startIdx);
+                        }
+                    }
+                }
+            });
+
+            if (vertices.length > 0) {
+                colDesc = this.engine.rapier.ColliderDesc.trimesh(
+                    new Float32Array(vertices),
+                    new Uint32Array(indices)
+                );
+            }
+        } else {
+            const box = new this.engine.THREE.Box3().setFromObject(this.object3D);
+            const size = new this.engine.THREE.Vector3();
+            const center = new this.engine.THREE.Vector3();
+            box.getSize(size);
+            box.getCenter(center);
+
+            colOffset = { x: center.x, y: center.y, z: center.z };
+
+            if (this.colliderType === "sphere") {
+                colDesc = this.engine.rapier.ColliderDesc.ball(Math.max(size.x, size.y, size.z) / 2);
+            } else if (this.colliderType === "box") {
+                colDesc = this.engine.rapier.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2);
+            }
+        }
+
+        this.object3D.position.set(this.position.x, this.position.y, this.position.z);
+        this.object3D.rotation.set(this.rotation.x, this.rotation.y, this.rotation.z);
+        this.object3D.updateMatrixWorld(true);
+        this.scene.add(this.object3D);
+
+        const rbDesc = this.static ?
+            this.engine.rapier.RigidBodyDesc.fixed() :
+            this.engine.rapier.RigidBodyDesc.dynamic();
+
+        rbDesc.setTranslation(this.position.x, this.position.y, this.position.z)
+            .setRotation(this.object3D.quaternion);
+
+        this.rigidBody = this.world.createRigidBody(rbDesc);
+        this.rigidBody.userData = { instance: this };
+
+        if (colDesc) {
+            colDesc.setFriction(this.friction).setRestitution(this.restitution);
+            colDesc.setTranslation(colOffset.x, colOffset.y, colOffset.z);
+            this.world.createCollider(colDesc, this.rigidBody);
+        }
+    }
+
+    update(dt) {
+        if (!this.static) {
+            this.sync_with_physics();
+        }
+    }
+}
+
+
+
+
+
+
 export class Player extends Instance {
     constructor(engine, gameScene, options = {}) {
         super(engine, gameScene);
 
         this.position = options.position ?? { x: 0, y: 0, z: 0 };
-        this.rotation = options.rotation ?? { x: 0, y: 0, z: 0 };
+        this.rotation = {
+            x: (options.rotation?.x ?? 0) * (DEG2RAD),
+            y: (options.rotation?.y ?? 0) * (DEG2RAD),
+            z: (options.rotation?.z ?? 0) * (DEG2RAD)
+        };
 
         this.walkSpeed = 5;
         this.sprintSpeed = 8;
@@ -167,6 +309,207 @@ export class Player extends Instance {
 
 
 
+export class Projectile extends Instance {
+    constructor(engine, gameScene, options = {}) {
+        super(engine, gameScene);
+        this.options = options;
+        this.speed = options.speed || 40;
+        this.radius = options.radius || 0.1;
+        this.lifeTime = options.lifeTime || 3;
+        this.explosionRadius = options.explosionRadius || 5;
+        this.explosionForce = options.explosionForce || 15;
+        this.color = options.color || 0xffff00;
+        
+        this.spawnTime = performance.now();
+    }
+
+    init() {
+        const geo = new this.engine.THREE.SphereGeometry(this.radius, 8, 8);
+        const mat = new this.engine.THREE.MeshStandardMaterial({ 
+            color: this.color, 
+            emissive: this.color, 
+            emissiveIntensity: 2 
+        });
+        this.object3D = new this.engine.THREE.Mesh(geo, mat);
+        this.scene.add(this.object3D);
+
+        const rbDesc = this.engine.rapier.RigidBodyDesc.dynamic()
+            .setTranslation(this.options.position.x, this.options.position.y, this.options.position.z)
+            .setCcdEnabled(true);
+
+        this.rigidBody = this.world.createRigidBody(rbDesc);
+        const colDesc = this.engine.rapier.ColliderDesc.ball(this.radius)
+            .setRestitution(0.1)
+            .setActiveEvents(this.engine.rapier.ActiveEvents.COLLISION_EVENTS);
+
+        this.world.createCollider(colDesc, this.rigidBody);
+
+        const dir = this.options.direction;
+        this.rigidBody.applyImpulse({ 
+            x: dir.x * this.speed, 
+            y: dir.y * this.speed, 
+            z: dir.z * this.speed 
+        }, true);
+    }
+
+    onCollide(self, other, force) {
+        this.explode();
+    }
+
+    explode() {
+        const pos = this.rigidBody.translation();
+
+        this.world.forEachRigidBody((body) => {
+            const bPos = body.translation();
+            const dist = Math.sqrt(
+                Math.pow(pos.x - bPos.x, 2) +
+                Math.pow(pos.y - bPos.y, 2) +
+                Math.pow(pos.z - bPos.z, 2)
+            );
+
+            if (dist < this.explosionRadius && dist > 0.1) {
+                const forceFactor = (1 - dist / this.explosionRadius) * this.explosionForce;
+                const dir = {
+                    x: (bPos.x - pos.x) / dist,
+                    y: (bPos.y - pos.y) / dist + 0.5,
+                    z: (bPos.z - pos.z) / dist
+                };
+
+                body.applyImpulse({
+                    x: dir.x * forceFactor,
+                    y: dir.y * forceFactor,
+                    z: dir.z * forceFactor
+                }, true);
+            }
+        });
+
+        this.gameScene.remove_instance(this.object3D.userData.instanceId);
+    }
+
+    update(dt) {
+        if ((performance.now() - this.spawnTime) / 1000 > this.lifeTime) {
+            this.gameScene.remove_instance(this.object3D.userData.instanceId);
+        }
+    }
+}
+
+
+
+
+
+export class FPSPlayer extends Player {
+    constructor(engine, gameScene, options = {}) {
+        super(engine, gameScene, options);
+
+        this.weapon = {
+            fireRate: 0.01,
+            lastFire: 0,
+            bulletSpeed: 120,
+            bulletLife: 20,
+            explosionRadius: 60,
+            explosionForce: 200,
+            autoFire: true
+        };
+
+        this.isFiring = false;
+    }
+
+    init() {
+        super.init();
+
+        if (this.engine.gui) {
+            const folder = this.engine.gui.addFolder("Weapon Settings");
+            folder.add(this.weapon, 'fireRate', 0.05, 1.0).name("Fire Rate");
+            folder.add(this.weapon, 'bulletSpeed', 10, 200).name("Bullet Speed");
+            folder.add(this.weapon, 'explosionRadius', 1, 20).name("Blast Radius");
+            folder.add(this.weapon, 'explosionForce', 0, 100).name("Blast Force");
+            folder.add(this.weapon, 'autoFire').name("Full Auto");
+            folder.close();
+        }
+
+        if (this.engine.isMobile) {
+            this.createMobileShootButton();
+        }
+
+        window.addEventListener('mousedown', (e) => { if(e.button === 0) this.isFiring = true; });
+        window.addEventListener('mouseup', (e) => { if(e.button === 0) this.isFiring = false; });
+    }
+
+    createMobileShootButton() {
+        const btn = document.createElement('div');
+        btn.innerHTML = 'shoot';
+        Object.assign(btn.style, {
+            position: 'fixed',
+            bottom: '140px',
+            right: '40px',
+            width: '60px',
+            height: '30px',
+            background: 'rgba(255, 0, 0, 0.3)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            fontSize: '12px',
+            zIndex: '2000',
+            pointerEvents: 'auto',
+            border: '2px solid rgba(255,255,255,0.5)',
+            userSelect: 'none'
+        });
+
+        btn.addEventListener('touchstart', (e) => { e.preventDefault(); this.isFiring = true; });
+        btn.addEventListener('touchend', () => { this.isFiring = false; });
+        document.body.appendChild(btn);
+    }
+
+    shoot() {
+        const now = performance.now() / 1000;
+        if (now - this.weapon.lastFire < this.weapon.fireRate) return;
+
+        this.weapon.lastFire = now;
+
+        const yaw = this.engine.look.yaw;
+        const pitch = this.engine.look.pitch;
+
+        const dir = new this.engine.THREE.Vector3(
+            -Math.sin(yaw) * Math.cos(pitch),
+            Math.sin(pitch),
+            -Math.cos(yaw) * Math.cos(pitch)
+        );
+
+        const camPos = this.engine.activeScene.camera.position;
+        const spawnPos = {
+            x: camPos.x + dir.x * 1,
+            y: camPos.y + dir.y * 1,
+            z: camPos.z + dir.z * 1
+        };
+
+        const id = "bullet_" + Math.random().toString(16).slice(2);
+        this.gameScene.add_instance(id, Projectile, {
+            position: spawnPos,
+            direction: dir,
+            speed: this.weapon.bulletSpeed,
+            lifeTime: this.weapon.bulletLife,
+            explosionRadius: this.weapon.explosionRadius,
+            explosionForce: this.weapon.explosionForce
+        });
+    }
+
+    update(dt) {
+        super.update(dt);
+
+        if (this.isFiring) {
+            this.shoot();
+            if (!this.weapon.autoFire) this.isFiring = false;
+        }
+    }
+}
+
+
+
+
+
+
+
+
 export class AnimatedCharacter extends Instance {
     constructor(engine, gameScene, options = {}) {
         super(engine, gameScene);
@@ -174,6 +517,11 @@ export class AnimatedCharacter extends Instance {
         this.options = options;
         this.modelName = options.model;
         this.position = options.position ?? { x: 0, y: 0, z: 0 };
+        this.rotation = {
+            x: (options.rotation?.x ?? 0) * (DEG2RAD),
+            y: (options.rotation?.y ?? 0) * (DEG2RAD),
+            z: (options.rotation?.z ?? 0) * (DEG2RAD)
+        };
         this.size = options.size ?? { x: 1, y: 1, z: 1 };
         this.scale = options.scale ?? 1;
 
@@ -289,6 +637,9 @@ export class AnimatedCharacter extends Instance {
 
         const rbDesc = this.engine.rapier.RigidBodyDesc.dynamic()
             .setTranslation(this.position.x, this.position.y, this.position.z)
+            .setRotation(new this.engine.THREE.Quaternion().setFromEuler(
+                new this.engine.THREE.Euler(this.rotation.x, this.rotation.y, this.rotation.z)
+            ))
             .lockRotations();
 
         this.rigidBody = this.world.createRigidBody(rbDesc);
@@ -367,52 +718,64 @@ export class BoxInstance extends Instance {
         super(engine, gameScene);
 
         this.options = options;
-        this.size = options.size ?? { x: 1, y: 1, z: 1 };
+        this.size = options.scale ? { x: options.scale, y: options.scale, z: options.scale } : options.size ?? { x: 1, y: 1, z: 1 };
         this.position = options.position ?? { x: 0, y: 5, z: 0 };
-        this.rotation = options.rotation ?? { x: 0, y: 0, z: 0 };
+        this.rotation = {
+            x: (options.rotation?.x ?? 0) * (DEG2RAD),
+            y: (options.rotation?.y ?? 0) * (DEG2RAD),
+            z: (options.rotation?.z ?? 0) * (DEG2RAD)
+        };
 
-        // physics properties
+        this.sides = ['right', 'left', 'top', 'bottom', 'front', 'back'];
+
+        this.uvSettings = options.uv ?? {};
+
         this.static = options.static ?? false;
         this.friction = options.friction ?? 0.5;
         this.restitution = options.restitution ?? 0.1;
-        this.density = options.density ?? 1;
-        this.linearDamping = options.linearDamping ?? 0.01;
-        this.angularDamping = options.angularDamping ?? 0.01;
-        this.allowSleep = options.allowSleep ?? true;
-        this.sleeping = options.sleeping ?? false;
 
-        // callbacks
-        this.onCollide = options.onCollide || null;
-
-        // texturing
         this.color = options.color ?? null;
-        this.diffuseTexture = options.diffuseTexture ?? null;
-        this.metalnessTexture = options.metalnessTexture ?? null;
-        this.roughnessTexture = options.roughnessTexture ?? null;
-        this.normalTexture = options.normalTexture ?? null;
-        this.emissiveTexture = options.emissiveTexture ?? null;
+        this.textureKeys = ['diffuseTexture', 'metalnessTexture', 'roughnessTexture', 'normalTexture'];
+    }
+
+    _prepareMaterialForSide(sideName) {
+        const sideUV = this.uvSettings[sideName] ?? { scale: { x: 1, y: 1 }, offset: { x: 0, y: 0 } };
+        const materialParams = { color: this.color };
+
+        const mapMapping = {
+            diffuseTexture: 'map',
+            metalnessTexture: 'metalnessMap',
+            roughnessTexture: 'roughnessMap',
+            normalTexture: 'normalMap'
+        };
+
+        Object.entries(mapMapping).forEach(([optKey, matKey]) => {
+            const textureName = this.options[optKey];
+            if (textureName) {
+                const original = this.engine.get_texture(textureName);
+                if (original) {
+                    const tex = original.clone();
+                    tex.wrapS = tex.wrapT = this.engine.THREE.RepeatWrapping;
+                    tex.repeat.set(sideUV.scale?.x ?? 1, sideUV.scale?.y ?? 1);
+                    tex.offset.set(sideUV.offset?.x ?? 0, sideUV.offset?.y ?? 0);
+                    tex.needsUpdate = true;
+                    materialParams[matKey] = tex;
+                }
+            }
+        });
+
+        return new this.engine.THREE.MeshStandardMaterial(materialParams);
     }
 
     init() {
         if (this.object3D) return;
-        const geo = new this.engine.THREE.BoxGeometry(
-            this.size.x,
-            this.size.y,
-            this.size.z
-        );
+
+        const geo = new this.engine.THREE.BoxGeometry(this.size.x, this.size.y, this.size.z);
         geo.computeTangents();
 
-        const mat = new this.engine.THREE.MeshStandardMaterial({
-            color: this.color,
-            map: this.diffuseTexture ? this.engine.get_texture(this.diffuseTexture) : null,
-            metalnessMap: this.metalnessTexture ? this.engine.get_texture(this.metalnessTexture) : null,
-            roughnessMap: this.roughnessTexture ? this.engine.get_texture(this.roughnessTexture) : null,
-            normalMap: this.normalTexture ? this.engine.get_texture(this.normalTexture) : null,
-            emissiveMap: this.emissiveTexture ? this.engine.get_texture(this.emissiveTexture) : null
-        });
+        const materials = this.sides.map(side => this._prepareMaterialForSide(side));
 
-
-        this.object3D = new this.engine.THREE.Mesh(geo, mat);
+        this.object3D = new this.engine.THREE.Mesh(geo, materials);
         this.object3D.castShadow = true;
         this.object3D.receiveShadow = true;
         this.scene.add(this.object3D);
@@ -424,35 +787,120 @@ export class BoxInstance extends Instance {
         rbDesc.setTranslation(this.position.x, this.position.y, this.position.z)
             .setRotation(new this.engine.THREE.Quaternion().setFromEuler(
                 new this.engine.THREE.Euler(this.rotation.x, this.rotation.y, this.rotation.z)
-            ))
-            .setLinearDamping(this.linearDamping)
-            .setAngularDamping(this.angularDamping)
-            .setCanSleep(this.allowSleep);
-
-        if (this.sleeping) rbDesc.setSleeping(true);
+            ));
 
         this.rigidBody = this.world.createRigidBody(rbDesc);
-
         this.rigidBody.userData = { instance: this };
 
-        const collider = this.engine.rapier.ColliderDesc.cuboid(
-            this.size.x / 2,
-            this.size.y / 2,
-            this.size.z / 2
-        )
+        const collider = this.engine.rapier.ColliderDesc.cuboid(this.size.x / 2, this.size.y / 2, this.size.z / 2)
             .setFriction(this.friction)
-            .setRestitution(this.restitution)
-            .setDensity(this.density)
-            .setActiveEvents(this.engine.rapier.ActiveEvents.COLLISION_EVENTS);
+            .setRestitution(this.restitution);
 
         this.world.createCollider(collider, this.rigidBody);
     }
 
+    update(dt) {
+        if (!this.static) this.sync_with_physics();
+    }
+}
+
+
+
+
+
+
+export class PlaneInstance extends Instance {
+    constructor(engine, gameScene, options = {}) {
+        super(engine, gameScene);
+
+        this.options = options;
+        this.size = options.size ?? { x: 10, y: 10, z: 0.05 };
+        this.position = options.position ?? { x: 0, y: 0, z: 0 };
+        this.rotation = {
+            x: (options.rotation?.x ?? 0) * (DEG2RAD),
+            y: (options.rotation?.y ?? 0) * (DEG2RAD),
+            z: (options.rotation?.z ?? 0) * (DEG2RAD)
+        };
+
+        this.uvSettings = options.uv ?? {};
+
+        this.static = options.static ?? false;
+        this.friction = options.friction ?? 0.5;
+        this.restitution = options.restitution ?? 0.1;
+
+        this.color = options.color ?? null;
+        this.textureKeys = ['diffuseTexture', 'metalnessTexture', 'roughnessTexture', 'normalTexture'];
+    }
+
+    _prepareMaterial() {
+        const uv = this.uvSettings.top || this.uvSettings.front || { scale: { x: 1, y: 1 }, offset: { x: 0, y: 0 } };
+        const materialParams = {
+            color: this.color,
+            side: this.engine.THREE.DoubleSide
+        };
+
+        const mapMapping = {
+            diffuseTexture: 'map',
+            metalnessTexture: 'metalnessMap',
+            roughnessTexture: 'roughnessMap',
+            normalTexture: 'normalMap'
+        };
+
+        Object.entries(mapMapping).forEach(([optKey, matKey]) => {
+            const textureName = this.options[optKey];
+            if (textureName) {
+                const original = this.engine.get_texture(textureName);
+                if (original) {
+                    const tex = original.clone();
+                    tex.wrapS = tex.wrapT = this.engine.THREE.RepeatWrapping;
+                    tex.repeat.set(uv.scale?.x ?? 1, uv.scale?.y ?? 1);
+                    tex.offset.set(uv.offset?.x ?? 0, uv.offset?.y ?? 0);
+                    tex.needsUpdate = true;
+                    materialParams[matKey] = tex;
+                }
+            }
+        });
+
+        return new this.engine.THREE.MeshStandardMaterial(materialParams);
+    }
+
+    init() {
+        if (this.object3D) return;
+
+        const geo = new this.engine.THREE.PlaneGeometry(this.size.x, this.size.y);
+        geo.computeTangents();
+
+        const mat = this._prepareMaterial();
+        this.object3D = new this.engine.THREE.Mesh(geo, mat);
+
+        this.object3D.position.set(this.position.x, this.position.y, this.position.z);
+        this.object3D.rotation.set(this.rotation.x, this.rotation.y, this.rotation.z);
+
+        this.object3D.receiveShadow = true;
+        this.scene.add(this.object3D);
+
+        const thickness = this.size.z ?? 0.001;
+        const rbDesc = this.static ?
+            this.engine.rapier.RigidBodyDesc.fixed() :
+            this.engine.rapier.RigidBodyDesc.dynamic();
+
+        rbDesc.setTranslation(this.position.x, this.position.y, this.position.z)
+            .setRotation(this.object3D.quaternion);
+
+        this.rigidBody = this.world.createRigidBody(rbDesc);
+
+        const collider = this.engine.rapier.ColliderDesc.cuboid(
+            this.size.x / 2,
+            this.size.y / 2,
+            thickness / 2
+        );
+
+        collider.setFriction(this.friction).setRestitution(this.restitution);
+        this.world.createCollider(collider, this.rigidBody);
+    }
 
     update(dt) {
-        if (!this.static) {
-            this.sync_with_physics();
-        }
+        if (!this.static) this.sync_with_physics();
     }
 }
 
@@ -476,7 +924,7 @@ export class GameScene {
         const sun = new engine.THREE.DirectionalLight(0xffffff, 8);
         sun.position.set(14, 22, 8);
         sun.castShadow = true;
-        sun.shadow.mapSize.setScalar(2048);
+        sun.shadow.mapSize.setScalar(8182);
         sun.shadow.camera.near = 0.5;
         sun.shadow.camera.far = 90;
         const shadowSize = 30;
@@ -503,12 +951,32 @@ export class GameScene {
         sunFolder.add(sun.position, 'y', 0, 50).name('Position Y');
         sunFolder.add(sun.position, 'z', -50, 50).name('Position Z');
 
-        const shadowFolder = sunFolder.addFolder('Shadow Camera');
-        shadowFolder.add(sun.shadow.camera, 'left', -100, 0).onChange(() => sun.shadow.camera.updateProjectionMatrix());
-        shadowFolder.add(sun.shadow.camera, 'right', 0, 100).onChange(() => sun.shadow.camera.updateProjectionMatrix());
-        shadowFolder.add(sun.shadow.camera, 'top', 0, 100).onChange(() => sun.shadow.camera.updateProjectionMatrix());
-        shadowFolder.add(sun.shadow.camera, 'bottom', -100, 0).onChange(() => sun.shadow.camera.updateProjectionMatrix());
-        shadowFolder.add(sun.shadow, 'bias', -0.01, 0.01).step(0.0001).name('Shadow Bias');
+        const shadowFolder = sunFolder.addFolder('Shadow Advanced Settings');
+
+        const shadowRes = {
+            resolution: sun.shadow.mapSize.x
+        };
+        shadowFolder.add(shadowRes, 'resolution', [256, 512, 1024, 2048, 4096, 8182, 10000, 12000, 16364, 32000, 64000, 128000])
+            .name('Shadow Resolution')
+            .onChange((val) => {
+                sun.shadow.mapSize.setScalar(val);
+                sun.shadow.map.dispose();
+                sun.shadow.map = null;
+            });
+
+        shadowFolder.add(sun.shadow, 'bias', -0.005, 0.005).step(0.0001).name('Shadow Bias');
+        shadowFolder.add(sun.shadow, 'normalBias', -0.05, 0.05).step(0.001).name('Normal Bias');
+        shadowFolder.add(sun.shadow, 'radius', 0, 10).name('Blur Radius (PCF)');
+
+        const scamFolder = shadowFolder.addFolder('Shadow Camera Bounds');
+        scamFolder.add(sun.shadow.camera, 'left', -100, 0).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        scamFolder.add(sun.shadow.camera, 'right', 0, 100).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        scamFolder.add(sun.shadow.camera, 'top', 0, 100).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        scamFolder.add(sun.shadow.camera, 'bottom', -100, 0).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        scamFolder.add(sun.shadow.camera, 'near', 0.1, 50).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        scamFolder.add(sun.shadow.camera, 'far', 1, 500).onChange(() => sun.shadow.camera.updateProjectionMatrix());
+        scamFolder.close();
+
         shadowFolder.close();
 
         sunFolder.close();
@@ -551,7 +1019,7 @@ export class GameScene {
         this.player = null;
 
         // --- DEBUG RENDERING ---
-        this.debugEnabled = true;
+        this.debugEnabled = false;
         this.sceneFolder.add(this, 'debugEnabled').name('Debug render');
         this.debugMesh = new engine.THREE.LineSegments(
             new engine.THREE.BufferGeometry(),
@@ -561,125 +1029,15 @@ export class GameScene {
         this.scene.add(this.debugMesh);
 
         this.raycaster = new engine.THREE.Raycaster();
-        this.raycasting = true;
+        this.raycasting = false;
         this.raycastTimer = 0;
+        this.raycastDelay = 0.1;
 
         this.sceneFolder.add(this, 'raycasting').name('Raycasted target outline');
+        this.sceneFolder.add(this, 'raycastDelay', 0.005, 0.2).name('Raycasted target outline delay');
 
         this.running = true;
         this.instances = new Map();
-    }
-
-    render(alpha, renderDt) {
-        if (this.engine.outlinePass) {
-            const time = performance.now() * 0.007;
-            const pulse = 4.0 + Math.sin(time) * 1.0;
-
-            this.engine.outlinePass.edgeStrength = pulse;
-            this.engine.outlinePass.edgeGlow = 0.5 + Math.sin(time) * 0.2;
-            this.engine.outlinePass.edgeThickness = 1.0;
-        }
-
-        this.camera.rotation.y = this.engine.look.yaw;
-        this.camera.rotation.x = this.engine.look.pitch;
-
-        if (!this.player) { this.player = this.get_first_instance_of_class(Player) }
-        if (!this.player) { this.player = "no-player" }
-
-        if (this.engine.engine_mode === "game" && this.player) {
-            const player = this.player;
-            if (player && player.rigidBody) {
-                const pos = player.rigidBody.translation();
-
-                let bobX = Math.cos(player.bobTime * 0.5) * 0.05 * player.bobIntensity;
-                let bobY = Math.sin(player.bobTime) * 0.08 * player.bobIntensity;
-                let bobZ = 0;
-
-                const leanVisualOffset = player.leanOffset * 0.4;
-                const yaw = this.engine.look.yaw;
-
-                this.camera.position.set(
-                    pos.x + bobX + (Math.cos(yaw) * leanVisualOffset),
-                    pos.y + (player.currentVisualHeight * 0.5) + bobY,
-                    pos.z + (Math.sin(yaw) * leanVisualOffset)
-                );
-
-                this.camera.rotation.z = player.leanOffset * 0.05;
-            }
-        } else {
-            this.camera.rotation.z = 0;
-            const baseSpeed = this.engine.input.sprint ? 20 : 10;
-            const speed = baseSpeed * renderDt * this.camera_speed;
-
-            const forward = new this.engine.THREE.Vector3(
-                -Math.sin(this.camera.rotation.y),
-                0,
-                -Math.cos(this.camera.rotation.y)
-            );
-            const right = new this.engine.THREE.Vector3().crossVectors(forward, this.camera.up);
-
-            if (this.engine.input.forward) this.camera.position.addScaledVector(forward, speed);
-            if (this.engine.input.back) this.camera.position.addScaledVector(forward, -speed);
-            if (this.engine.input.left) this.camera.position.addScaledVector(right, -speed);
-            if (this.engine.input.right) this.camera.position.addScaledVector(right, speed);
-            if (this.engine.input.up) this.camera.position.y += speed;
-            if (this.engine.input.crouch) this.camera.position.y -= speed;
-        }
-
-        for (const instance of this.instances.values()) {
-            instance.sync_with_physics(alpha);
-        }
-
-        this.scene.updateMatrixWorld(true);
-
-        this.raycastTimer += renderDt;
-
-        if (this.raycastTimer > 0.05 && this.raycasting) {
-            this.raycastTimer = 0;
-
-            this.raycaster.setFromCamera(this.engine.look.locked ? { x: 0, y: 0 } : this.engine.mouse, this.camera);
-
-            const targetableObjects = [];
-            for (const instance of this.instances.values()) {
-                if (instance.object3D) targetableObjects.push(instance.object3D);
-            }
-
-            const intersects = this.raycaster.intersectObjects(targetableObjects, true);
-
-            if (intersects.length > 0) {
-                let object = intersects[0].object;
-
-                let rootObject = object;
-                while (rootObject.parent && !rootObject.userData.instanceId) {
-                    rootObject = rootObject.parent;
-                }
-
-                if (this.engine.outlinePass) {
-                    this.engine.outlinePass.selectedObjects = [rootObject];
-                }
-
-                this.engine.canvas3D.style.cursor = 'pointer';
-            } else {
-                if (this.engine.outlinePass) {
-                    this.engine.outlinePass.selectedObjects = [];
-                }
-                this.engine.canvas3D.style.cursor = 'default';
-            }
-        }
-
-        if (Math.abs(this.camera.fov - this.targetFOV) > 0.1) {
-            this.camera.fov = this.engine.THREE.MathUtils.lerp(this.camera.fov, this.targetFOV, 0.15);
-            this.camera.updateProjectionMatrix();
-        }
-
-        if (this.debugEnabled) {
-            const { vertices, colors } = this.world.debugRender();
-            this.debugMesh.geometry.setAttribute('position', new this.engine.THREE.BufferAttribute(vertices, 3));
-            this.debugMesh.geometry.setAttribute('color', new this.engine.THREE.BufferAttribute(colors, 4));
-            this.debugMesh.visible = true;
-        } else {
-            this.debugMesh.visible = false;
-        }
     }
 
 
@@ -772,6 +1130,118 @@ export class GameScene {
         }
     }
 
+    render(alpha, renderDt) {
+        if (this.engine.outlinePass) {
+            const time = performance.now() * 0.007;
+            const pulse = 4.0 + Math.sin(time) * 1.0;
+
+            this.engine.outlinePass.edgeStrength = pulse;
+            this.engine.outlinePass.edgeGlow = 0.5 + Math.sin(time) * 0.2;
+            this.engine.outlinePass.edgeThickness = 1.0;
+        }
+
+        this.camera.rotation.y = this.engine.look.yaw;
+        this.camera.rotation.x = this.engine.look.pitch;
+
+        if (!this.player) { this.player = this.get_first_instance_of_class(Player) }
+        if (!this.player) { this.player = "no-player" }
+
+        if (this.engine.engine_mode === "game" && this.player) {
+            const player = this.player;
+            if (player && player.rigidBody) {
+                const pos = player.rigidBody.translation();
+
+                let bobX = Math.cos(player.bobTime * 0.5) * 0.05 * player.bobIntensity;
+                let bobY = Math.sin(player.bobTime) * 0.08 * player.bobIntensity;
+                let bobZ = 0;
+
+                const leanVisualOffset = player.leanOffset * 0.4;
+                const yaw = this.engine.look.yaw;
+
+                this.camera.position.set(
+                    pos.x + bobX + (Math.cos(yaw) * leanVisualOffset),
+                    pos.y + (player.currentVisualHeight * 0.5) + bobY,
+                    pos.z + (Math.sin(yaw) * leanVisualOffset)
+                );
+
+                this.camera.rotation.z = player.leanOffset * 0.05;
+            }
+        } else {
+            this.camera.rotation.z = 0;
+            const baseSpeed = this.engine.input.sprint ? 20 : 10;
+            const speed = baseSpeed * renderDt * this.camera_speed;
+
+            const forward = new this.engine.THREE.Vector3(
+                -Math.sin(this.camera.rotation.y),
+                0,
+                -Math.cos(this.camera.rotation.y)
+            );
+            const right = new this.engine.THREE.Vector3().crossVectors(forward, this.camera.up);
+
+            if (this.engine.input.forward) this.camera.position.addScaledVector(forward, speed);
+            if (this.engine.input.back) this.camera.position.addScaledVector(forward, -speed);
+            if (this.engine.input.left) this.camera.position.addScaledVector(right, -speed);
+            if (this.engine.input.right) this.camera.position.addScaledVector(right, speed);
+            if (this.engine.input.up) this.camera.position.y += speed;
+            if (this.engine.input.crouch) this.camera.position.y -= speed;
+        }
+
+        for (const instance of this.instances.values()) {
+            instance.sync_with_physics(alpha);
+        }
+
+        this.scene.updateMatrixWorld(true);
+
+        this.raycastTimer += renderDt;
+
+        if (this.raycastTimer > this.raycastDelay && this.raycasting) {
+            this.raycastTimer = 0;
+
+            this.raycaster.setFromCamera(this.engine.look.locked ? { x: 0, y: 0 } : this.engine.mouse, this.camera);
+
+            const targetableObjects = [];
+            for (const instance of this.instances.values()) {
+                if (instance.object3D) targetableObjects.push(instance.object3D);
+            }
+
+            const intersects = this.raycaster.intersectObjects(targetableObjects, true);
+
+            if (intersects.length > 0) {
+                let object = intersects[0].object;
+
+                let rootObject = object;
+                while (rootObject.parent && !rootObject.userData.instanceId) {
+                    rootObject = rootObject.parent;
+                }
+
+                if (this.engine.outlinePass) {
+                    this.engine.outlinePass.selectedObjects = [rootObject];
+                }
+
+                this.engine.canvas3D.style.cursor = 'pointer';
+            } else {
+                if (this.engine.outlinePass) {
+                    this.engine.outlinePass.selectedObjects = [];
+                }
+                this.engine.canvas3D.style.cursor = 'default';
+            }
+        }
+
+        if (Math.abs(this.camera.fov - this.targetFOV) > 0.1) {
+            this.camera.fov = this.engine.THREE.MathUtils.lerp(this.camera.fov, this.targetFOV, 0.15);
+            this.camera.updateProjectionMatrix();
+        }
+
+        if (this.debugEnabled) {
+            const { vertices, colors } = this.world.debugRender();
+            this.debugMesh.geometry.setAttribute('position', new this.engine.THREE.BufferAttribute(vertices, 3));
+            this.debugMesh.geometry.setAttribute('color', new this.engine.THREE.BufferAttribute(colors, 4));
+            this.debugMesh.visible = true;
+        } else {
+            this.debugMesh.visible = false;
+        }
+    }
+
     update(dt) {
         if (!this.running) return;
 
@@ -859,6 +1329,8 @@ export class Engine {
         this.renderWidth = 2560;
         this.renderHeight = 1440;
         this.fps = 0;
+        this.resolutionScale = 1.0;
+        this.postProcessEnabled = false;
 
         // main variables
         this.scenes = new Map();
@@ -1487,6 +1959,8 @@ export class Engine {
             const posteffectFolder = this.gui.addFolder('PostEffects');
             posteffectFolder.close();
 
+            posteffectFolder.add(this, 'postProcessEnabled').name('Post-Process Enabled');
+
             const bloomFolder = posteffectFolder.addFolder('Bloom');
             bloomFolder.add(bloomPass, 'strength', 0, 3);
             bloomFolder.add(bloomPass, 'radius', 0, 1);
@@ -1776,8 +2250,8 @@ export class Engine {
             this.render_ui();
             if (this.renderer && this.activeScene) {
                 this.activeScene.render(alpha, renderDt);
-                //this.renderer.render(this.activeScene.scene, this.activeScene.camera);
-                if (this.composer) {
+
+                if (this.postProcessEnabled && this.composer) {
                     this.composer.render();
                 } else {
                     this.renderer.render(this.activeScene.scene, this.activeScene.camera);

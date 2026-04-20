@@ -20,7 +20,6 @@
 </head>
 
 <body>
-
     <script type="module">
         import RAPIER from './libs/rapier.js';
         import * as THREE from './libs/three.module.js';
@@ -41,7 +40,7 @@
         import { OutlinePass } from './libs/postprocessing/OutlinePass.js';
         import { TAARenderPass } from './libs/postprocessing/TAARenderPass.js';
 
-        import { Engine, GameScene, Player, BoxInstance, AnimatedCharacter } from './Engine.js';
+        import { generateRandomHexColor, Engine, GameScene, Player, BoxInstance, AnimatedCharacter, BasicModelInstance, PlaneInstance, FPSPlayer } from './Engine.js';
 
         const engine = new Engine({
             rapier: RAPIER,
@@ -68,41 +67,38 @@
         engine.add_texture("wood_normal", "./gfx/wood_normal.jpg");
         engine.add_texture("wood_rough", "./gfx/wood_rough.jpg");
 
-        engine.add_hdri("hdri", "./gfx/day.hdr");
+        engine.add_hdri("hdri", "./hdr/day.hdr");
 
         engine.add_model("indoraptor", "./glb/indoraptor.glb");
         engine.add_model("henry", "./glb/henry.glb");
+        engine.add_model("tv", "./glb/tv.glb")
 
         engine.init({
             display_mode: 'normal_canvas'
         }).then(() => {
             const gameScene = engine.add_scene("game", GameScene);
 
-            gameScene.add_instance("player", Player, {
-                position: { x: 0, y: 0, z: 0 }
+            gameScene.add_instance("player", FPSPlayer, {
+                position: { x: 0, y: 0.5, z: 0 }
             });
 
-            gameScene.add_instance("box1", BoxInstance, {
+            gameScene.add_instance("floor_plane", PlaneInstance, {
                 diffuseTexture: "wood_diffuse",
-                metalnessTexture: "wood_metal",
-                normalTexture: "wood_normal",
-                roughnessTexture: "wood_rough",
+                size: { x: 50, y: 50 },
                 position: { x: 0, y: -1, z: 0 },
-                size: { x: 10, y: 0.5, z: 10 },
-                static: true
-            });
-            gameScene.add_instance("box2", BoxInstance, {
-                diffuseTexture: "wood_diffuse",
-                metalnessTexture: "wood_metal",
-                normalTexture: "wood_normal",
-                roughnessTexture: "wood_rough",
-                position: { x: 0, y: 5, z: 0 },
-
-                onCollide: (self, other, force) => {
-                    console.log("Force: " + force);
-                    //self.object3D.material.color.set(0x00ff00);
+                rotation: { x: -90, y: 0, z: 0 },
+                static: true,
+                uv: {
+                    top: { scale: { x: 10, y: 10 } }
                 }
             });
+            
+            for (let i = 0; i < 10; i++) {
+                gameScene.add_instance("box_" + i, BoxInstance, {
+                    position: { x: Math.random() * 5, y: 5 + i, z: Math.random() * 5 },
+                    color: generateRandomHexColor()
+                });
+            }
 
             gameScene.add_instance("character", AnimatedCharacter, {
                 model: "indoraptor",
@@ -114,6 +110,14 @@
                 model: "henry",
                 position: { x: 3, y: 0, z: 0 },
                 scale: 0.5
+            });
+
+            gameScene.add_instance("TV", BasicModelInstance, {
+                model: "tv",
+                position: { x: 4, y: 0.5, z: 4 },
+                rotation: { x: 90, y: 90, z: 0 },
+                scale: 2,
+                colliderType: "shape_from_model"
             });
 
             gameScene.set_hdri("hdri", 1);
