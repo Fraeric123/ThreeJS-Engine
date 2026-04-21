@@ -5,10 +5,43 @@
 export const DEG2RAD = Math.PI / 180;
 
 
-export const generateRandomHexColor = () => {
+export const RandomHexColor = () => {
     const randomColor = Math.floor(Math.random() * 16777215).toString(16);
     return "#" + randomColor.padStart(6, '0');
 };
+
+
+
+
+
+export class Material {
+    constructor(name = 'default', options = {}) {
+        this.name = name;
+        this.textures = {
+            diffuse: options.diffuse || null,
+            normal: options.normal || null,
+            roughness: options.roughness || null,
+            metalness: options.metalness || null,
+            ao: options.ao || null
+        };
+        this.physics = {
+            friction: options.friction ?? 0.5,
+            restitution: options.restitution ?? 0.2,
+            density: options.density ?? 1.0
+        };
+        this.sounds = {
+            impact: options.impactSound || null,
+            break: options.breakSound || null,
+            scrape: options.scrapeSound || null,
+            step: options.stepSound || null
+        };
+        this.health = options.health ?? 100;
+        this.static = options.static ?? false;
+    }
+}
+
+
+
 
 
 export class Instance {
@@ -68,6 +101,161 @@ export class Instance {
 
 
 
+export class BallInstance extends Instance {
+    constructor(engine, gameScene, options = {}) {
+        super(engine, gameScene, options);
+        this.options = options;
+        this.materialDef = this.engine.get_material(options.material || 'default');
+        
+        this.radius = options.radius ?? (options.scale ?? 1) / 2;
+        this.position = options.position ?? { x: 0, y: 5, z: 0 };
+        this.rotation = {
+            x: (options.rotation?.x ?? 0) * (DEG2RAD),
+            y: (options.rotation?.y ?? 0) * (DEG2RAD),
+            z: (options.rotation?.z ?? 0) * (DEG2RAD)
+        };
+        this.color = options.color ?? 0xffffff;
+        this.detail = options.detail ?? 32;
+        this.static = options.static ?? this.materialDef.static;
+    }
+
+    init() {
+        if (this.object3D) return;
+
+        const geo = new this.engine.THREE.SphereGeometry(this.radius, this.detail, this.detail);
+        const mat = new this.engine.THREE.MeshStandardMaterial({ color: this.color });
+        if (this.materialDef.textures.diffuse) {
+            mat.map = this.engine.get_texture(this.materialDef.textures.diffuse);
+        }
+
+        this.object3D = new this.engine.THREE.Mesh(geo, mat);
+        this.object3D.castShadow = this.object3D.receiveShadow = true;
+        this.scene.add(this.object3D);
+
+        const rbDesc = this.static ? 
+            this.engine.rapier.RigidBodyDesc.fixed() : 
+            this.engine.rapier.RigidBodyDesc.dynamic();
+        
+        rbDesc.setTranslation(this.position.x, this.position.y, this.position.z);
+        this.rigidBody = this.world.createRigidBody(rbDesc);
+        this.rigidBody.userData = { instance: this };
+
+        const colDesc = this.engine.rapier.ColliderDesc.ball(this.radius)
+            .setFriction(this.materialDef.physics.friction)
+            .setRestitution(this.materialDef.physics.restitution)
+            .setDensity(this.materialDef.physics.density);
+
+        this.world.createCollider(colDesc, this.rigidBody);
+    }
+
+    update(dt) {
+        if (!this.static) this.sync_with_physics();
+        super.update(dt);
+    }
+}
+
+
+
+
+
+export class BlackHoleInstance extends Instance {
+    constructor(engine, gameScene, options = {}) {
+        super(engine, gameScene, options);
+
+        this.options = options;
+        this.radius = options.radius ?? 1.0;
+        this.mass = options.mass ?? 1.0;
+        this.position = options.position ?? { x: 0, y: 10, z: -20 };
+        this.rotation = {
+            x: (options.rotation?.x ?? 0) * (DEG2RAD),
+            y: (options.rotation?.y ?? 0) * (DEG2RAD),
+            z: (options.rotation?.z ?? 0) * (DEG2RAD)
+        };
+
+        this.materialDef = this.engine.get_material(options.material || 'default');
+        this.static = options.static ?? false;
+    }
+
+    init() {
+        if (this.object3D) return;
+
+        // 1. Vizuální část - vytvoříme neviditelnou sféru pro reprezentaci v Three.js
+        // (Shader se vykresluje přes celou obrazovku, ale potřebujeme objekt v paměti)
+        const geo = new this.engine.THREE.SphereGeometry(this.radius, 8, 8);
+        const mat = new this.engine.THREE.MeshBasicMaterial({
+            color: 0x000000,
+            transparent: true,
+            opacity: 0.0 // Neviditelná, efekt dělá shader
+        });
+
+        this.object3D = new this.engine.THREE.Mesh(geo, mat);
+        this.object3D.position.set(this.position.x, this.position.y, this.position.z);
+        this.scene.add(this.object3D);
+
+        // 2. Fyzikální část (Rapier) - stejné jako BallInstance
+        const rbDesc = this.static ?
+            this.engine.rapier.RigidBodyDesc.fixed() :
+            this.engine.rapier.RigidBodyDesc.dynamic();
+
+        rbDesc.setTranslation(this.position.x, this.position.y, this.position.z);
+
+        this.rigidBody = this.world.createRigidBody(rbDesc);
+        this.rigidBody.userData = { instance: this };
+
+        const colliderDesc = this.engine.rapier.ColliderDesc.ball(this.radius)
+            .setFriction(this.materialDef.physics.friction)
+            .setRestitution(this.materialDef.physics.restitution);
+
+        this.world.createCollider(colliderDesc, this.rigidBody);
+
+        // 3. Aktivace shaderu
+        if (this.engine.blackHolePass) {
+            this.engine.blackHolePass.enabled = true;
+            this.updateShaderUniforms();
+        }
+    }
+
+    // V engine.js uprav metodu v BlackHoleInstance:
+
+    updateShaderUniforms() {
+        const pass = this.engine.blackHolePass;
+        if (pass && this.rigidBody) {
+            const pos = this.rigidBody.translation();
+            const rot = this.rigidBody.rotation(); // Rapier vrací kvaternion {x, y, z, w}
+
+            pass.uniforms["bhPos"].value.set(pos.x, pos.y, pos.z);
+            pass.uniforms["bhMass"].value = this.mass;
+
+            // Vytvoříme rotační matici z kvaternionu pro shader
+            const quaternion = new this.engine.THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
+            const rotationMatrix = new this.engine.THREE.Matrix4().makeRotationFromQuaternion(quaternion);
+
+            // Předáme matici do shaderu (v shaderu ji nazveme bhRotation)
+            if (pass.uniforms["bhRotation"]) {
+                pass.uniforms["bhRotation"].value.copy(rotationMatrix);
+            }
+        }
+    }
+    update(dt) {
+        if (!this.static) {
+            this.sync_with_physics(); // Nejdřív srovnat pozici a rotaci 3D objektu
+        }
+
+        this.updateShaderUniforms(); // Pak poslat čerstvá data do shaderu
+        super.update(dt);
+    }
+
+    destroy() {
+        // Po smazání instance efekt vypneme
+        if (this.engine.blackHolePass) {
+            this.engine.blackHolePass.enabled = false;
+        }
+        super.destroy();
+    }
+}
+
+
+
 
 
 export class BasicModelInstance extends Instance {
@@ -83,8 +271,7 @@ export class BasicModelInstance extends Instance {
         };
         this.scale = options.scale ?? 1;
         this.static = options.static ?? false;
-        this.friction = options.friction ?? 0.5;
-        this.restitution = options.restitution ?? 0.1;
+        this.materialDef = this.engine.get_material(options.material || 'default');
         this.colliderType = options.colliderType ?? "box";
     }
 
@@ -95,7 +282,7 @@ export class BasicModelInstance extends Instance {
         if (!asset) return;
 
         this.object3D = this.engine.clone(asset.scene);
-        
+
         this.object3D.scale.setScalar(this.scale);
         this.object3D.position.set(0, 0, 0);
         this.object3D.rotation.set(0, 0, 0);
@@ -178,7 +365,10 @@ export class BasicModelInstance extends Instance {
         this.rigidBody.userData = { instance: this };
 
         if (colDesc) {
-            colDesc.setFriction(this.friction).setRestitution(this.restitution);
+            colDesc.setFriction(this.materialDef.physics.friction)
+                .setRestitution(this.materialDef.physics.restitution)
+                .setDensity(this.materialDef.physics.density);
+
             colDesc.setTranslation(colOffset.x, colOffset.y, colOffset.z);
             this.world.createCollider(colDesc, this.rigidBody);
         }
@@ -247,6 +437,21 @@ export class Player extends Instance {
         this.collider = this.world.createCollider(colliderDesc, this.rigidBody);
     }
 
+    playFootstepSound() {
+        const pos = this.rigidBody.translation();
+        const ray = new this.engine.rapier.Ray({ x: pos.x, y: pos.y, z: pos.z }, { x: 0, y: -1, z: 0 });
+        const hit = this.world.castRay(ray, 1.5, true);
+
+        if (hit) {
+            const instance = hit.collider.parent()?.userData?.instance;
+            if (instance && instance.materialDef?.sounds.step) {
+                this.engine.play_sound(instance.materialDef.sounds.step, {
+                    volume: this.isCrouching ? 0.1 : 0.25
+                });
+            }
+        }
+    }
+
     update(dt) {
         if (this.engine.engine_mode !== "game") return;
 
@@ -298,6 +503,16 @@ export class Player extends Instance {
             this.bobTime += dt * this.walkSpeed;
         }
 
+        if (this.isMoving && Math.abs(velocity.y) < 0.1) {
+            const stepTrigger = Math.sin(this.bobTime);
+            if (stepTrigger > 0.95 && !this.stepReady) {
+                this.playFootstepSound();
+                this.stepReady = true;
+            } else if (stepTrigger < 0) {
+                this.stepReady = false;
+            }
+        }
+
         if (input.up && Math.abs(velocity.y) < 0.05 && !this.isCrouching) {
             this.rigidBody.applyImpulse({ x: 0, y: this.jumpForce, z: 0 }, true);
         }
@@ -318,17 +533,18 @@ export class Projectile extends Instance {
         this.lifeTime = options.lifeTime || 3;
         this.explosionRadius = options.explosionRadius || 5;
         this.explosionForce = options.explosionForce || 15;
-        this.color = options.color || 0xffff00;
-        
+        this.materialDef = this.engine.get_material(options.material || 'default');
+
         this.spawnTime = performance.now();
+        this.color = options.color ?? 0xffffff;
     }
 
     init() {
         const geo = new this.engine.THREE.SphereGeometry(this.radius, 8, 8);
-        const mat = new this.engine.THREE.MeshStandardMaterial({ 
-            color: this.color, 
-            emissive: this.color, 
-            emissiveIntensity: 2 
+        const mat = new this.engine.THREE.MeshStandardMaterial({
+            color: this.color,
+            emissive: this.color,
+            emissiveIntensity: 2
         });
         this.object3D = new this.engine.THREE.Mesh(geo, mat);
         this.scene.add(this.object3D);
@@ -345,14 +561,21 @@ export class Projectile extends Instance {
         this.world.createCollider(colDesc, this.rigidBody);
 
         const dir = this.options.direction;
-        this.rigidBody.applyImpulse({ 
-            x: dir.x * this.speed, 
-            y: dir.y * this.speed, 
-            z: dir.z * this.speed 
+        this.rigidBody.applyImpulse({
+            x: dir.x * this.speed,
+            y: dir.y * this.speed,
+            z: dir.z * this.speed
         }, true);
     }
 
     onCollide(self, other, force) {
+        if (other && other.materialDef?.sounds.impact) {
+            const pos = this.rigidBody.translation();
+            this.engine.play_sound_3d(other.materialDef.sounds.impact, pos, {
+                volume: 0.5,
+                refDistance: 5
+            });
+        }
         this.explode();
     }
 
@@ -431,8 +654,10 @@ export class FPSPlayer extends Player {
             this.createMobileShootButton();
         }
 
-        window.addEventListener('mousedown', (e) => { if(e.button === 0) this.isFiring = true; });
-        window.addEventListener('mouseup', (e) => { if(e.button === 0) this.isFiring = false; });
+        this._onMouseDown = (e) => { if (e.button === 0) this.isFiring = true; };
+        this._onMouseUp = (e) => { if (e.button === 0) this.isFiring = false; };
+        window.addEventListener('mousedown', this._onMouseDown);
+        window.addEventListener('mouseup', this._onMouseUp);
     }
 
     createMobileShootButton() {
@@ -499,6 +724,18 @@ export class FPSPlayer extends Player {
         if (this.isFiring) {
             this.shoot();
             if (!this.weapon.autoFire) this.isFiring = false;
+        }
+    }
+
+    destroy() {
+        super.destroy();
+        if (this._onMouseDown) {
+            window.removeEventListener('mousedown', this._onMouseDown);
+            this._onMouseDown = null;
+        }
+        if (this._onMouseUp) {
+            window.removeEventListener('mouseup', this._onMouseUp);
+            this._onMouseUp = null;
         }
     }
 }
@@ -716,8 +953,9 @@ export class AnimatedCharacter extends Instance {
 export class BoxInstance extends Instance {
     constructor(engine, gameScene, options = {}) {
         super(engine, gameScene);
-
         this.options = options;
+        this.materialDef = this.engine.get_material(options.material || 'default');
+        
         this.size = options.scale ? { x: options.scale, y: options.scale, z: options.scale } : options.size ?? { x: 1, y: 1, z: 1 };
         this.position = options.position ?? { x: 0, y: 5, z: 0 };
         this.rotation = {
@@ -725,85 +963,48 @@ export class BoxInstance extends Instance {
             y: (options.rotation?.y ?? 0) * (DEG2RAD),
             z: (options.rotation?.z ?? 0) * (DEG2RAD)
         };
-
+        this.color = options.color ?? 0xffffff;
+        this.static = options.static ?? this.materialDef.static;
+        this.uvSettings = options.uv || {};
         this.sides = ['right', 'left', 'top', 'bottom', 'front', 'back'];
-
-        this.uvSettings = options.uv ?? {};
-
-        this.static = options.static ?? false;
-        this.friction = options.friction ?? 0.5;
-        this.restitution = options.restitution ?? 0.1;
-
-        this.color = options.color ?? null;
-        this.textureKeys = ['diffuseTexture', 'metalnessTexture', 'roughnessTexture', 'normalTexture'];
     }
 
     _prepareMaterialForSide(sideName) {
         const sideUV = this.uvSettings[sideName] ?? { scale: { x: 1, y: 1 }, offset: { x: 0, y: 0 } };
-        const materialParams = { color: this.color };
-
-        const mapMapping = {
-            diffuseTexture: 'map',
-            metalnessTexture: 'metalnessMap',
-            roughnessTexture: 'roughnessMap',
-            normalTexture: 'normalMap'
-        };
-
-        Object.entries(mapMapping).forEach(([optKey, matKey]) => {
-            const textureName = this.options[optKey];
-            if (textureName) {
-                const original = this.engine.get_texture(textureName);
-                if (original) {
-                    const tex = original.clone();
-                    tex.wrapS = tex.wrapT = this.engine.THREE.RepeatWrapping;
-                    tex.repeat.set(sideUV.scale?.x ?? 1, sideUV.scale?.y ?? 1);
-                    tex.offset.set(sideUV.offset?.x ?? 0, sideUV.offset?.y ?? 0);
-                    tex.needsUpdate = true;
-                    materialParams[matKey] = tex;
-                }
-            }
-        });
-
-        return new this.engine.THREE.MeshStandardMaterial(materialParams);
+        const mat = new this.engine.THREE.MeshStandardMaterial({ color: this.color });
+        
+        if (this.materialDef.textures.diffuse) {
+            const tex = this.engine.get_texture(this.materialDef.textures.diffuse).clone();
+            tex.wrapS = tex.wrapT = this.engine.THREE.RepeatWrapping;
+            tex.repeat.set(sideUV.scale?.x ?? 1, sideUV.scale?.y ?? 1);
+            tex.offset.set(sideUV.offset?.x ?? 0, sideUV.offset?.y ?? 0);
+            tex.needsUpdate = true;
+            mat.map = tex;
+        }
+        return mat;
     }
 
     init() {
         if (this.object3D) return;
-
         const geo = new this.engine.THREE.BoxGeometry(this.size.x, this.size.y, this.size.z);
-        geo.computeTangents();
+        const mats = this.sides.map(side => this._prepareMaterialForSide(side));
 
-        const materials = this.sides.map(side => this._prepareMaterialForSide(side));
-
-        this.object3D = new this.engine.THREE.Mesh(geo, materials);
-        this.object3D.castShadow = true;
-        this.object3D.receiveShadow = true;
+        this.object3D = new this.engine.THREE.Mesh(geo, mats);
+        this.object3D.castShadow = this.object3D.receiveShadow = true;
         this.scene.add(this.object3D);
 
-        const rbDesc = this.static ?
-            this.engine.rapier.RigidBodyDesc.fixed() :
-            this.engine.rapier.RigidBodyDesc.dynamic();
-
-        rbDesc.setTranslation(this.position.x, this.position.y, this.position.z)
-            .setRotation(new this.engine.THREE.Quaternion().setFromEuler(
-                new this.engine.THREE.Euler(this.rotation.x, this.rotation.y, this.rotation.z)
-            ));
-
+        const rbDesc = this.static ? this.engine.rapier.RigidBodyDesc.fixed() : this.engine.rapier.RigidBodyDesc.dynamic();
+        rbDesc.setTranslation(this.position.x, this.position.y, this.position.z);
         this.rigidBody = this.world.createRigidBody(rbDesc);
         this.rigidBody.userData = { instance: this };
 
-        const collider = this.engine.rapier.ColliderDesc.cuboid(this.size.x / 2, this.size.y / 2, this.size.z / 2)
-            .setFriction(this.friction)
-            .setRestitution(this.restitution);
-
-        this.world.createCollider(collider, this.rigidBody);
-    }
-
-    update(dt) {
-        if (!this.static) this.sync_with_physics();
+        const col = this.engine.rapier.ColliderDesc.cuboid(this.size.x/2, this.size.y/2, this.size.z/2)
+            .setFriction(this.materialDef.physics.friction)
+            .setRestitution(this.materialDef.physics.restitution)
+            .setDensity(this.materialDef.physics.density);
+        this.world.createCollider(col, this.rigidBody);
     }
 }
-
 
 
 
@@ -812,8 +1013,9 @@ export class BoxInstance extends Instance {
 export class PlaneInstance extends Instance {
     constructor(engine, gameScene, options = {}) {
         super(engine, gameScene);
-
         this.options = options;
+        this.materialDef = this.engine.get_material(options.material || 'default');
+        
         this.size = options.size ?? { x: 10, y: 10, z: 0.05 };
         this.position = options.position ?? { x: 0, y: 0, z: 0 };
         this.rotation = {
@@ -821,88 +1023,56 @@ export class PlaneInstance extends Instance {
             y: (options.rotation?.y ?? 0) * (DEG2RAD),
             z: (options.rotation?.z ?? 0) * (DEG2RAD)
         };
-
-        this.uvSettings = options.uv ?? {};
-
-        this.static = options.static ?? false;
-        this.friction = options.friction ?? 0.5;
-        this.restitution = options.restitution ?? 0.1;
-
-        this.color = options.color ?? null;
-        this.textureKeys = ['diffuseTexture', 'metalnessTexture', 'roughnessTexture', 'normalTexture'];
-    }
-
-    _prepareMaterial() {
-        const uv = this.uvSettings.top || this.uvSettings.front || { scale: { x: 1, y: 1 }, offset: { x: 0, y: 0 } };
-        const materialParams = {
-            color: this.color,
-            side: this.engine.THREE.DoubleSide
-        };
-
-        const mapMapping = {
-            diffuseTexture: 'map',
-            metalnessTexture: 'metalnessMap',
-            roughnessTexture: 'roughnessMap',
-            normalTexture: 'normalMap'
-        };
-
-        Object.entries(mapMapping).forEach(([optKey, matKey]) => {
-            const textureName = this.options[optKey];
-            if (textureName) {
-                const original = this.engine.get_texture(textureName);
-                if (original) {
-                    const tex = original.clone();
-                    tex.wrapS = tex.wrapT = this.engine.THREE.RepeatWrapping;
-                    tex.repeat.set(uv.scale?.x ?? 1, uv.scale?.y ?? 1);
-                    tex.offset.set(uv.offset?.x ?? 0, uv.offset?.y ?? 0);
-                    tex.needsUpdate = true;
-                    materialParams[matKey] = tex;
-                }
-            }
-        });
-
-        return new this.engine.THREE.MeshStandardMaterial(materialParams);
+        this.color = options.color ?? 0xffffff;
+        this.static = options.static ?? true;
+        this.uvSettings = options.uv || {};
     }
 
     init() {
         if (this.object3D) return;
-
         const geo = new this.engine.THREE.PlaneGeometry(this.size.x, this.size.y);
-        geo.computeTangents();
+        
+        const uv = this.uvSettings.top || { scale: { x: 1, y: 1 }, offset: { x: 0, y: 0 } };
+        const mat = new this.engine.THREE.MeshStandardMaterial({ color: this.color, side: this.engine.THREE.DoubleSide });
 
-        const mat = this._prepareMaterial();
+        if (this.materialDef.textures.diffuse) {
+            const tex = this.engine.get_texture(this.materialDef.textures.diffuse).clone();
+            tex.wrapS = tex.wrapT = this.engine.THREE.RepeatWrapping;
+            tex.repeat.set(uv.scale.x, uv.scale.y);
+            tex.needsUpdate = true;
+            mat.map = tex;
+        }
+
         this.object3D = new this.engine.THREE.Mesh(geo, mat);
-
         this.object3D.position.set(this.position.x, this.position.y, this.position.z);
         this.object3D.rotation.set(this.rotation.x, this.rotation.y, this.rotation.z);
-
         this.object3D.receiveShadow = true;
         this.scene.add(this.object3D);
 
-        const thickness = this.size.z ?? 0.001;
-        const rbDesc = this.static ?
-            this.engine.rapier.RigidBodyDesc.fixed() :
-            this.engine.rapier.RigidBodyDesc.dynamic();
-
+        const rbDesc = this.engine.rapier.RigidBodyDesc.fixed().setTranslation(this.position.x, this.position.y, this.position.z);
         rbDesc.setTranslation(this.position.x, this.position.y, this.position.z)
-            .setRotation(this.object3D.quaternion);
+          .setRotation(this.object3D.quaternion);
 
         this.rigidBody = this.world.createRigidBody(rbDesc);
+        this.rigidBody.userData = { instance: this };
 
-        const collider = this.engine.rapier.ColliderDesc.cuboid(
-            this.size.x / 2,
-            this.size.y / 2,
-            thickness / 2
-        );
-
-        collider.setFriction(this.friction).setRestitution(this.restitution);
-        this.world.createCollider(collider, this.rigidBody);
-    }
-
-    update(dt) {
-        if (!this.static) this.sync_with_physics();
+        const col = this.engine.rapier.ColliderDesc.cuboid(this.size.x/2, this.size.y/2, (this.size.z ?? 0.05)/2);
+        col.setFriction(this.materialDef.physics.friction).setRestitution(this.materialDef.physics.restitution);
+        this.world.createCollider(col, this.rigidBody);
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1080,6 +1250,19 @@ export class GameScene {
             Math.pow(v1.y - v2.y, 2) +
             Math.pow(v1.z - v2.z, 2)
         );
+
+        if (impactForce > 1.5) {
+            [inst1, inst2].forEach(inst => {
+                if (inst.materialDef && inst.materialDef.sounds.impact) {
+                    const pos = inst.rigidBody.translation();
+
+                    this.engine.play_sound_3d(inst.materialDef.sounds.impact, pos, {
+                        volume: Math.min(impactForce * 0.1, 1.0),
+                        refDistance: 2.0
+                    });
+                }
+            });
+        }
 
         if (inst1.onCollide) {
             inst1.onCollide(inst1, inst2, impactForce);
@@ -1330,7 +1513,7 @@ export class Engine {
         this.renderHeight = 1440;
         this.fps = 0;
         this.resolutionScale = 1.0;
-        this.postProcessEnabled = false;
+        this.postProcessEnabled = true;
 
         // main variables
         this.scenes = new Map();
@@ -1344,8 +1527,10 @@ export class Engine {
             textures: new Map(),
             sounds: new Map(),
             models: new Map(),
-            hdris: new Map()
+            hdris: new Map(),
+            materials: new Map()
         }
+
         this.loadingContainer = null;
         this.loadingBar = null;
         this.statusText = null;
@@ -1729,6 +1914,13 @@ export class Engine {
             this.composer.setSize(this.width, this.height);
         }
 
+        if (this.pixelPass) {
+            this.pixelPass.uniforms["resolution"].value.set(
+                this.width * this.dpr,
+                this.height * this.dpr
+            );
+        }
+
         this.ctx2D.setTransform(
             this.dpr * scaleX, 0,
             0, this.dpr * scaleY,
@@ -1900,6 +2092,7 @@ export class Engine {
             this.width,
             this.height
         );
+        this.gtaoPass.enabled = false;
         this.gtaoPass.output = this.GTAOPass.OUTPUT.Default;
         this.gtaoPass.intensity = 1.0;
         this.gtaoPass.radius = 0.5;
@@ -1910,6 +2103,7 @@ export class Engine {
 
         // TAA
         const taaPass = new this.TAARenderPass(this.activeScene.scene, this.activeScene.camera);
+        taaPass.enabled = false;
         taaPass.unbiased = true;
         taaPass.sampleLevel = 2;
         this.composer.addPass(taaPass);
@@ -1921,6 +2115,7 @@ export class Engine {
             this.activeScene.scene,
             this.activeScene.camera
         );
+        this.outlinePass.enabled = false;
         this.outlinePass.edgeStrength = 3;
         this.outlinePass.edgeGlow = 1.2;
         this.outlinePass.edgeThickness = 1;
@@ -1937,6 +2132,7 @@ export class Engine {
             new this.THREE.Vector2(this.width, this.height),
             0.1, 0.1, 1
         );
+        bloomPass.enabled = false;
         this.composer.addPass(bloomPass);
         this.activeScene.bokehPass = new this.BokehPass(this.activeScene.scene, this.activeScene.camera, {
             focus: 10.0,
@@ -1948,7 +2144,281 @@ export class Engine {
 
         // SMAA
         const smaaPass = new this.SMAAPass(this.width * this.dpr, this.height * this.dpr);
+        smaaPass.enabled = false;
         this.composer.addPass(smaaPass);
+
+
+        // BlackHole
+        const BlackHoleShader = {
+            uniforms: {
+                "tDiffuse": { value: null },
+                "time": { value: 0.0 },
+                "resolution": { value: null },
+                "cameraPos": { value: null },
+                "cameraInverseViewProj": { value: null },
+                "cameraViewProj": { value: null },
+                "bhPos": { value: null },
+                "bhRotation": { value: new this.THREE.Matrix4() },
+                "bhMass": { value: 1.0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D tDiffuse;
+                uniform float time;
+                uniform vec2 resolution;
+                uniform vec3 cameraPos;
+                uniform mat4 cameraInverseViewProj;
+                uniform mat4 cameraViewProj;
+                uniform vec3 bhPos;
+                uniform float bhMass;
+                uniform mat4 bhRotation;
+                
+                varying vec2 vUv;
+                
+                #define PI 3.14159265359
+
+                float curve(float x) { return x * x * (3.0 - 2.0 * x); }
+                float pcurve(float x){ float x2 = x * x; return 12.207 * x2 * x2 * (1.0 - x); }
+
+                // Šum pro rozbití pruhování (banding) při raymarchingu
+                float InterleavedGradientNoise(vec2 uv) {
+                    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+                    return fract(magic.z * fract(dot(uv, magic.xy)));
+                }
+
+                float hash(vec3 p) {
+                    p = fract(p * vec3(443.897, 441.423, 437.195));
+                    p += dot(p, p.yzx + 19.19);
+                    return fract((p.x + p.y) * p.z);
+                }
+
+                float Calculate3DNoise(vec3 p) {
+                    vec3 i = floor(p);
+                    vec3 f = fract(p);
+                    f = f * f * (3.0 - 2.0 * f);
+                    return mix(mix(mix(hash(i + vec3(0.0, 0.0, 0.0)), hash(i + vec3(1.0, 0.0, 0.0)), f.x),
+                                mix(hash(i + vec3(0.0, 1.0, 0.0)), hash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+                            mix(mix(hash(i + vec3(0.0, 0.0, 1.0)), hash(i + vec3(1.0, 0.0, 1.0)), f.x),
+                                mix(hash(i + vec3(0.0, 1.0, 1.0)), hash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+                }
+
+                float CalculateCloudFBM(vec3 position, vec3 shift){
+                    float accum = 0.0;
+                    float alpha = 0.5;
+                    vec3 p = position;
+                    for (int i = 0; i < 4; i++) {
+                        accum += alpha * Calculate3DNoise(p);
+                        p = (p + shift) * 2.5;
+                        alpha *= 0.87;
+                    }
+                    return accum + (0.87 / 2.5) / 4.0;
+                }
+
+                vec3 Blackbody(float temp) {
+                    vec3 color = vec3(255.0);
+                    temp /= 100.0;
+                    if (temp <= 66.0) {
+                        color.r = 255.0;
+                        color.g = clamp(99.4708025861 * log(temp) - 161.1195681661, 0.0, 255.0);
+                        if (temp <= 19.0) color.b = 0.0;
+                        else color.b = clamp(138.5177312231 * log(temp - 10.0) - 305.0447927307, 0.0, 255.0);
+                    } else {
+                        color.r = clamp(329.698727446 * pow(temp - 60.0, -0.1332047592), 0.0, 255.0);
+                        color.g = clamp(288.1221695283 * pow(temp - 60.0, -0.0755148492), 0.0, 255.0);
+                        color.b = 255.0;
+                    }
+                    return color / 255.0;
+                }
+
+                mat3 RotateMatrix(float x, float y, float z){
+                    mat3 matx = mat3(1.0, 0.0, 0.0, 0.0, cos(x), sin(x), 0.0, -sin(x), cos(x));
+                    mat3 maty = mat3(cos(y), 0.0, -sin(y), 0.0, 1.0, 0.0, sin(y), 0.0, cos(y));
+                    mat3 matz = mat3(cos(z), sin(z), 0.0, -sin(z), cos(z), 0.0, 0.0, 0.0, 1.0);
+                    return maty * matx * matz;
+                }
+
+                void WarpSpace(inout vec3 rayDir, vec3 rayPos, vec3 center){
+                    vec3 diff = center - rayPos;
+                    float dist2 = dot(diff, diff);
+                    vec3 dirToCenter = normalize(diff);
+                    // Zvýšením čísla 0.2 na vyšší (např. 0.5) posílíš efekt ohybu z dálky
+                    float warpFactor = bhMass / (dist2 + 0.000001);
+                    rayDir = normalize(rayDir + dirToCenter * warpFactor * 0.5); 
+                }
+
+                vec3 getRayDir(vec2 uv) {
+                    vec4 ndc = vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+                    vec4 worldPos = cameraInverseViewProj * ndc;
+                    worldPos.xyz /= worldPos.w;
+                    return normalize(worldPos.xyz - cameraPos);
+                }
+
+                vec2 getScreenUV(vec3 dir) {
+                    vec4 ndc = cameraViewProj * vec4(cameraPos + dir * 100.0, 1.0);
+                    return (ndc.xy / ndc.w) * 0.5 + 0.5;
+                }
+
+                void main() {
+                    vec3 rayDir = getRayDir(vUv);
+                    vec3 rayPos = cameraPos;
+                    vec3 center = bhPos;
+                    
+                    float transmittance = 1.0;
+                    vec3 result = vec3(0.0);
+                    
+                    mat3 rotation = transpose(mat3(bhRotation));
+                    
+                    // Nastavení kroků přesně podle Minecraftu
+                    const float steps = 70.0;
+                    const float rSteps = 1.0 / steps;
+                    const float stepLength = 0.5;
+
+                    const float discRadius = 2.25;
+                    const float discWidth = 3.5;
+                    const float discInner = discRadius - discWidth * 0.5;
+
+                    float distToCenter = length(center - cameraPos);
+                    float influenceRadius = bhMass * 250.0;
+                    
+                    // Dithering šum zabrání vzniku ostrých kruhů (banding) při průchodu plynem
+                    float dither = InterleavedGradientNoise(gl_FragCoord.xy);
+                    
+                    vec3 L = center - cameraPos;
+                    if (dot(normalize(L), rayDir) > 0.0 || distToCenter < influenceRadius) {
+                        
+                        if (distToCenter > influenceRadius) {
+                            rayPos += rayDir * (distToCenter - influenceRadius);
+                        }
+
+                        // Posunutí startu paprsku o šum
+                        rayPos += rayDir * (stepLength * dither);
+
+                        for(int i = 0; i < int(steps); i++){
+                            if(transmittance < 0.0001) break;
+
+                            WarpSpace(rayDir, rayPos, center);
+                            rayPos += rayDir * stepLength;
+
+                            vec3 localPos = rayPos - center;
+                            vec3 discPos = rotation * localPos;
+
+                            float r = length(discPos);
+                            // Přesná náhrada za atan2 z MC 
+                            float p = atan(-discPos.z, -discPos.x);
+                            float h = discPos.y;
+
+                            // Event horizon záchyt pro zrychlení a ostřejší jádro
+                            if (length(localPos) < bhMass * 0.6) {
+                                transmittance = 0.0;
+                                break;
+                            }
+
+                            float radialGradient = 1.0 - clamp((r - discInner) / discWidth * 0.5, 0.0, 1.0);
+                            float dist = abs(h);
+                            float discThickness = 0.1 * radialGradient;
+
+                            float fr = abs(r - discInner) + 0.4;
+                            float fade = fr * fr * fr * fr * 0.04;
+                            float bloomFactor = 1.0 / (h * h * 40.0 + fade + 0.00002);
+                            bloomFactor *= clamp(2.0 - abs(dist) / discThickness, 0.0, 1.0);
+                            bloomFactor = bloomFactor * bloomFactor;
+
+                            float dr = pcurve(radialGradient);
+                            float density = dr * clamp(1.0 - abs(dist) / discThickness, 0.0, 1.0);
+                            density = clamp(density * 0.7, 0.0, 1.0);
+                            density = clamp(density + bloomFactor * 0.1, 0.0, 1.0);
+
+                            if (density > 0.0001){
+                                vec3 discCoord = vec3(r, p * (1.0 - radialGradient * 0.5), h * 0.1) * 3.5;
+                                float fbm = CalculateCloudFBM(discCoord, time * vec3(0.1, 0.07, 0.0));
+                                
+                                // Minecraft umocňuje FBM na 4. pro velmi detailní a kontrastní mračna
+                                fbm = fbm * fbm;
+                                fbm = fbm * fbm; 
+                                density *= fbm * dr;
+
+                                float gr = 1.0 - radialGradient;
+                                float glowStrength = 1.0 / (gr * gr * gr * gr * 400.0 + 0.002);
+                                vec3 glow = Blackbody(2700.0 + glowStrength * 50.0) * glowStrength;
+
+                                // Dopplerův efekt (posuv k modré na jedné straně, k červené na druhé)
+                                glow *= sin(p - 1.07) * 0.75 + 1.0;
+                                
+                                float stepTransmittance = exp2(-density * 7.0);
+                                result += (1.0 - stepTransmittance) * transmittance * glow;
+                                transmittance *= stepTransmittance;
+                            }
+
+                            // Vnitřní fotonový prstenec (přesný torus SDF)
+                            float torusDist = length(vec2(length(discPos.xz) - 1.0, discPos.y + 0.05));
+                            float bloomDisc = 1.0 / (pow(torusDist, 3.5) + 0.001);
+                            vec3 col = Blackbody(12000.0);
+                            bloomDisc *= step(0.5, r);
+
+                            result += col * bloomDisc * 0.1 * transmittance;
+                        }
+                    }
+
+                    result *= rSteps;
+                    
+                    vec2 bentUV = getScreenUV(rayDir);
+                    bentUV = clamp(bentUV, 0.001, 0.999);
+                    vec4 bgColor = texture2D(tDiffuse, bentUV);
+
+                    // Pokud paprsek pohltila díra, pozadí bude černé
+                    if (transmittance < 0.001) bgColor = vec4(0.0, 0.0, 0.0, 1.0);
+
+                    gl_FragColor = vec4(bgColor.rgb * transmittance + result, 1.0);
+                }
+            `
+        };
+        this.blackHolePass = new this.ShaderPass(BlackHoleShader);
+        this.blackHolePass.uniforms["resolution"].value = new this.THREE.Vector2(this.width * this.dpr, this.height * this.dpr);
+        this.blackHolePass.uniforms["cameraPos"].value = new this.THREE.Vector3();
+        this.blackHolePass.uniforms["bhPos"].value = new this.THREE.Vector3(0, 10, -20);
+        this.blackHolePass.uniforms["cameraInverseViewProj"].value = new this.THREE.Matrix4();
+        this.blackHolePass.uniforms["cameraViewProj"].value = new this.THREE.Matrix4();
+        this.blackHolePass.enabled = false; // Zkontroluj v GUI, zda je zapnuté PostProcessEnabled
+        this.composer.addPass(this.blackHolePass);
+
+
+        // Pixel
+        const PixelShader = {
+            uniforms: {
+                "tDiffuse": { value: null },
+                "resolution": { value: new this.THREE.Vector2() },
+                "pixelSize": { value: 3.0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D tDiffuse;
+                uniform vec2 resolution;
+                uniform float pixelSize;
+                varying vec2 vUv;
+    
+                void main() {
+                    vec2 dxy = vec2(pixelSize * 1.5, pixelSize) / resolution;
+                    vec2 coord = dxy * (floor(vUv / dxy) + 0.5);
+                    gl_FragColor = texture2D(tDiffuse, coord);
+                }
+            `
+        }
+        this.pixelPass = new this.ShaderPass(PixelShader);
+        this.pixelPass.uniforms["resolution"].value.set(this.width * this.dpr, this.height * this.dpr);
+        this.pixelPass.uniforms["pixelSize"].value = 1.0;
+        this.composer.addPass(this.pixelPass);
 
 
         // Final
@@ -1961,13 +2431,27 @@ export class Engine {
 
             posteffectFolder.add(this, 'postProcessEnabled').name('Post-Process Enabled');
 
+            const pixelFolder = posteffectFolder.addFolder('Pixel Effect');
+            pixelFolder.add(this.pixelPass.uniforms["pixelSize"], 'value', 1, 60, 1).name('Pixel Size');
+            pixelFolder.close();
+
+            const bhFolder = posteffectFolder.addFolder('Black Hole Effect');
+            bhFolder.add(this.blackHolePass, 'enabled').name('Enabled');
+            bhFolder.add(this.blackHolePass.uniforms["bhMass"], 'value', 0.0, 5.0).name('Mass / Gravity');
+            bhFolder.add(this.blackHolePass.uniforms["bhPos"].value, 'x', -100, 100).name('Position X');
+            bhFolder.add(this.blackHolePass.uniforms["bhPos"].value, 'y', -50, 100).name('Position Y');
+            bhFolder.add(this.blackHolePass.uniforms["bhPos"].value, 'z', -100, 100).name('Position Z');
+            bhFolder.close();
+
             const bloomFolder = posteffectFolder.addFolder('Bloom');
+            bloomFolder.add(bloomPass, 'enabled').name('Enabled');
             bloomFolder.add(bloomPass, 'strength', 0, 3);
             bloomFolder.add(bloomPass, 'radius', 0, 1);
             bloomFolder.add(bloomPass, 'threshold', 0, 1);
             bloomFolder.close();
 
             const gtaoFolder = posteffectFolder.addFolder('GTAO Shadows');
+            gtaoFolder.add(this.gtaoPass, 'enabled').name('Enabled');
             gtaoFolder.add(this.gtaoPass, 'intensity', 0, 4).name('Intensity');
             gtaoFolder.add(this.gtaoPass, 'radius', 0, 5).name('Radius');
             gtaoFolder.add(this.gtaoPass, 'distanceExponent', 1, 4).name('Distance exponent');
@@ -1988,6 +2472,7 @@ export class Engine {
             taaFolder.close();
 
             const outlineFolder = posteffectFolder.addFolder('Outline');
+            outlineFolder.add(this.outlinePass, 'enabled').name('Enabled');
             outlineFolder.add(this.outlinePass, 'edgeStrength', 0, 100);
             outlineFolder.add(this.outlinePass, 'edgeThickness', 0, 4);
             outlineFolder.add(this.outlinePass, 'edgeGlow', 0, 2);
@@ -2098,6 +2583,10 @@ export class Engine {
         this.assets.sounds.set(name, path);
     }
 
+    add_material(material) {
+        this.assets.materials.set(material.name, material);
+    }
+
     get_number_of_textures() {
         return this.assets.textures.size;
     }
@@ -2128,6 +2617,13 @@ export class Engine {
 
     get_sound(name) {
         return this.assets.sounds.get(name);
+    }
+
+    get_material(name) {
+        if (name == "default") {
+            return new Material();
+        }
+        return this.assets.materials.get(name) || this.get_material("default");
     }
 
     async load_assets() {
@@ -2206,6 +2702,61 @@ export class Engine {
     }
 
 
+    // sound management
+
+    play_sound(name, options = {}) {
+        const buffer = this.get_sound(name);
+        if (!buffer || !this.activeScene) return null;
+
+        const sound = new this.THREE.Audio(this.activeScene.listener);
+        sound.setBuffer(buffer);
+        sound.setLoop(options.loop ?? false);
+        sound.setVolume(options.volume ?? 1.0);
+        sound.play();
+
+        if (!options.loop) {
+            sound.source.onended = () => { sound.disconnect(); };
+        }
+
+        return sound;
+    }
+
+    play_sound_3d(name, position, options = {}) {
+        const buffer = this.get_sound(name);
+        if (!buffer || !this.activeScene) return null;
+
+        const sound = new this.THREE.PositionalAudio(this.activeScene.listener);
+        sound.setBuffer(buffer);
+        sound.setRefDistance(options.refDistance ?? 1.0);
+        sound.setMaxDistance(options.maxDistance ?? 100.0);
+        sound.setLoop(options.loop ?? false);
+        sound.setVolume(options.volume ?? 1.0);
+
+        const audioLoaderObject = new this.THREE.Object3D();
+        audioLoaderObject.position.set(position.x, position.y, position.z);
+        this.activeScene.scene.add(audioLoaderObject);
+        audioLoaderObject.add(sound);
+
+        sound.play();
+
+        if (!options.loop) {
+            sound.source.onended = () => {
+                sound.disconnect();
+                this.activeScene.scene.remove(audioLoaderObject);
+            };
+        }
+
+        return sound;
+    }
+
+    stop_sound(sound) {
+        if (sound && sound.isPlaying) {
+            sound.stop();
+            sound.disconnect();
+        }
+    }
+
+
     // main functions
 
     async init({ display_mode }) {
@@ -2252,6 +2803,18 @@ export class Engine {
                 this.activeScene.render(alpha, renderDt);
 
                 if (this.postProcessEnabled && this.composer) {
+                    if (this.blackHolePass && this.blackHolePass.enabled && this.activeScene.camera) {
+                        const cam = this.activeScene.camera;
+                        this.blackHolePass.uniforms["time"].value = time / 1000;
+                        this.blackHolePass.uniforms["cameraPos"].value.copy(cam.position);
+
+                        cam.updateMatrixWorld();
+                        const viewProj = new this.THREE.Matrix4();
+                        viewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+
+                        this.blackHolePass.uniforms["cameraViewProj"].value.copy(viewProj);
+                        this.blackHolePass.uniforms["cameraInverseViewProj"].value.copy(viewProj).invert();
+                    }
                     this.composer.render();
                 } else {
                     this.renderer.render(this.activeScene.scene, this.activeScene.camera);
