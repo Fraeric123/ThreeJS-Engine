@@ -40,7 +40,18 @@
         import { OutlinePass } from './libs/postprocessing/OutlinePass.js';
         import { TAARenderPass } from './libs/postprocessing/TAARenderPass.js';
 
-        import { generateRandomHexColor, Engine, GameScene, Player, BoxInstance, AnimatedCharacter, BasicModelInstance, PlaneInstance, FPSPlayer } from './engine.js';
+        import {
+            RandomHexColor,
+            Engine,
+            GameScene,
+            Player,
+            BoxInstance,
+            AnimatedCharacter,
+            BasicModelInstance,
+            PlaneInstance,
+            FPSPlayer,
+            Material
+        } from './engine.js';
 
         const engine = new Engine({
             rapier: RAPIER,
@@ -67,6 +78,24 @@
         engine.add_texture("wood_normal", "./gfx/wood_normal.jpg");
         engine.add_texture("wood_rough", "./gfx/wood_rough.jpg");
 
+        engine.add_sound("test_sound", "./sfx/wood_collision_1.wav");
+
+        engine.add_material(new Material("test_wood", {
+            diffuse: "wood_diffuse",
+            normal: "wood_normal",
+            roughness: "wood_rough",
+            metalness: "wood_metal",
+
+            friction: 0.5,
+            restitution: 0.2,
+            density: 1.0,
+
+            impactSound: "test_sound",
+            breakSound: "test_sound",
+            scrapeSound: "test_sound",
+            stepSound: "test_sound",
+        }));
+
         engine.add_hdri("hdri", "./hdr/day.hdr");
 
         engine.add_model("indoraptor", "./glb/indoraptor.glb");
@@ -83,7 +112,7 @@
             });
 
             gameScene.add_instance("floor_plane", PlaneInstance, {
-                diffuseTexture: "wood_diffuse",
+                material: "test_wood",
                 size: { x: 50, y: 50 },
                 position: { x: 0, y: -1, z: 0 },
                 rotation: { x: -90, y: 0, z: 0 },
@@ -92,11 +121,12 @@
                     top: { scale: { x: 10, y: 10 } }
                 }
             });
-            
+
             for (let i = 0; i < 10; i++) {
                 gameScene.add_instance("box_" + i, BoxInstance, {
                     position: { x: Math.random() * 5, y: 5 + i, z: Math.random() * 5 },
-                    color: generateRandomHexColor()
+                    material: "test_wood",
+                    color: RandomHexColor()
                 });
             }
 
