@@ -50,7 +50,8 @@
             BasicModelInstance,
             PlaneInstance,
             FPSPlayer,
-            Material
+            Material,
+            Indoraptor
         } from './engine.js';
 
         const engine = new Engine({
@@ -113,12 +114,12 @@
 
             gameScene.add_instance("floor_plane", PlaneInstance, {
                 material: "test_wood",
-                size: { x: 50, y: 50 },
+                size: { x: 5000, y: 5000 },
                 position: { x: 0, y: -1, z: 0 },
                 rotation: { x: -90, y: 0, z: 0 },
                 static: true,
                 uv: {
-                    top: { scale: { x: 10, y: 10 } }
+                    top: { scale: { x: 1000, y: 1000 } }
                 }
             });
 
@@ -129,6 +130,85 @@
                     color: RandomHexColor()
                 });
             }
+
+            const hX = -15;
+            const hZ = -15;
+            const wallHeight = 4;
+            const wallThickness = 0.5;
+
+            gameScene.add_instance("house_wall_back", BoxInstance, {
+                static: true,
+                size: { x: 8, y: wallHeight, z: wallThickness },
+                position: { x: hX, y: 1, z: hZ + 4 },
+                material: "test_wood",
+                color: 0x5d4037
+            });
+
+            gameScene.add_instance("house_wall_left", BoxInstance, {
+                static: true,
+                size: { x: wallThickness, y: wallHeight, z: 8 },
+                position: { x: hX - 4, y: 1, z: hZ },
+                material: "test_wood",
+                color: 0x5d4037
+            });
+
+            gameScene.add_instance("house_wall_right", BoxInstance, {
+                static: true,
+                size: { x: wallThickness, y: wallHeight, z: 8 },
+                position: { x: hX + 4, y: 1, z: hZ },
+                material: "test_wood",
+                color: 0x5d4037
+            });
+
+            gameScene.add_instance("house_front_left", BoxInstance, {
+                static: true,
+                size: { x: 3, y: wallHeight, z: wallThickness },
+                position: { x: hX - 2.5, y: 1, z: hZ - 4 },
+                material: "test_wood",
+                color: 0x5d4037
+            });
+
+            gameScene.add_instance("house_front_right", BoxInstance, {
+                static: true,
+                size: { x: 3, y: wallHeight, z: wallThickness },
+                position: { x: hX + 2.5, y: 1, z: hZ - 4 },
+                material: "test_wood",
+                color: 0x5d4037
+            });
+
+            gameScene.add_instance("house_front_top", BoxInstance, {
+                static: true,
+                size: { x: 2, y: 1.5, z: wallThickness },
+                position: { x: hX, y: 2.25, z: hZ - 4 },
+                material: "test_wood",
+                color: 0x5d4037
+            });
+
+            gameScene.add_instance("house_roof_left", BoxInstance, {
+                static: true,
+                size: { x: 6, y: 0.2, z: 9 },
+                position: { x: hX - 2.2, y: 4.2, z: hZ },
+                rotation: { x: 0, y: 0, z: 35 },
+                material: "test_wood",
+                color: 0x3e2723
+            });
+
+            gameScene.add_instance("house_roof_right", BoxInstance, {
+                static: true,
+                size: { x: 6, y: 0.2, z: 9 },
+                position: { x: hX + 2.2, y: 4.2, z: hZ },
+                rotation: { x: 0, y: 0, z: -35 },
+                material: "test_wood",
+                color: 0x3e2723
+            });
+
+            gameScene.add_instance("house_table", BoxInstance, {
+                static: false,
+                size: { x: 3, y: 0.2, z: 2 },
+                position: { x: hX, y: 0, z: hZ },
+                material: "test_wood",
+                color: 0x795548
+            });
 
             gameScene.add_instance("character", AnimatedCharacter, {
                 model: "indoraptor",
@@ -148,6 +228,14 @@
                 rotation: { x: 90, y: 90, z: 0 },
                 scale: 2,
                 colliderType: "shape_from_model"
+            });
+
+            gameScene.add_instance("indo", Indoraptor, {
+                model: "indoraptor",
+                position: { x: 10, y: 2, z: 10 },
+                offsetZ: -0.5,
+                runSpeed: 8,
+                attackDistance: 3
             });
 
             gameScene.set_hdri("hdri", 1);

@@ -106,7 +106,7 @@ export class BallInstance extends Instance {
         super(engine, gameScene, options);
         this.options = options;
         this.materialDef = this.engine.get_material(options.material || 'default');
-        
+
         this.radius = options.radius ?? (options.scale ?? 1) / 2;
         this.position = options.position ?? { x: 0, y: 5, z: 0 };
         this.rotation = {
@@ -132,10 +132,10 @@ export class BallInstance extends Instance {
         this.object3D.castShadow = this.object3D.receiveShadow = true;
         this.scene.add(this.object3D);
 
-        const rbDesc = this.static ? 
-            this.engine.rapier.RigidBodyDesc.fixed() : 
+        const rbDesc = this.static ?
+            this.engine.rapier.RigidBodyDesc.fixed() :
             this.engine.rapier.RigidBodyDesc.dynamic();
-        
+
         rbDesc.setTranslation(this.position.x, this.position.y, this.position.z);
         this.rigidBody = this.world.createRigidBody(rbDesc);
         this.rigidBody.userData = { instance: this };
@@ -398,7 +398,7 @@ export class Player extends Instance {
         };
 
         this.walkSpeed = 5;
-        this.sprintSpeed = 8;
+        this.sprintSpeed = 20;
         this.crouchSpeed = 2.5;
         this.jumpForce = 7;
 
@@ -950,12 +950,300 @@ export class AnimatedCharacter extends Instance {
 
 
 
+
+export class Indoraptor extends AnimatedCharacter {
+    constructor(engine, gameScene, options = {}) {
+        options.model = options.model || "indoraptor";
+        super(engine, gameScene, options);
+
+        this.runSpeed = options.runSpeed ?? 7.0;
+        this.walkSpeed = options.walkSpeed ?? 2.0;
+        this.stalkSpeed = options.stalkSpeed ?? 1.2;
+        this.turnSpeed = options.turnSpeed ?? 3.5;
+
+        this.attackDistance = 3.0;
+        this.stalkDistance = 15.0;
+        this.detectionDistance = 35.0;
+
+        this.aggressiveness = Math.random();
+        this.curiosity = Math.random();
+
+        this.state = "idle";
+        this.stateTimer = 0;
+        this.actionCooldown = 0;
+        this.stuckTimer = 0;
+        this.targetDirection = new this.engine.THREE.Vector3(0, 0, 1);
+        this.investigateTarget = null;
+
+        this.anims = {
+            idles: [
+                "indoraptor_pm_Indoraptor_skeleton|a_idle",
+                "indoraptor_pm_Indoraptor_skeleton|a_idle.001",
+                "indoraptor_pm_Indoraptor_skeleton|a_idle_crouch2",
+                "indoraptor_pm_Indoraptor_skeleton|camera_idle"
+            ],
+            walks: [
+                "indoraptor_pm_Indoraptor_skeleton|a_walkN",
+                "indoraptor_pm_Indoraptor_skeleton|a_crouchN"
+            ],
+            runs: [
+                "indoraptor_pm_Indoraptor_skeleton|a_runN",
+                "indoraptor_pm_Indoraptor_skeleton|b_runN"
+            ],
+            attacks: [
+                "indoraptor_pm_Indoraptor_skeleton|a_idle",
+            ],
+            jump: "indoraptor_pm_Indoraptor_skeleton|a_jump",
+            flinch: "indoraptor_pm_Indoraptor_skeleton|a_flinch"
+        };
+    }
+
+    init() {
+        super.init();
+        this.pickRandomAction();
+        this.currentQuat = new this.engine.THREE.Quaternion();
+    }
+
+    playAnim(animName, duration = 0.4) {
+        this.playAnimation(animName, { duration: duration });
+    }
+
+    playRandomAnim(animArray, duration = 0.4) {
+        const randomAnim = animArray[Math.floor(Math.random() * animArray.length)];
+        this.playAnim(randomAnim, duration);
+    }
+
+    pickRandomAction() {
+        if (Math.random() > 0.4) {
+            this.state = "idle";
+            this.stateTimer = 2 + Math.random() * 4;
+            this.playRandomAnim(this.anims.idles, 0.5);
+            this.targetDirection.set(0, 0, 0);
+        } else {
+            this.state = "wander";
+            this.stateTimer = 2 + Math.random() * 5;
+            this.playAnim(this.anims.walks[0], 0.5);
+            const angle = Math.random() * Math.PI * 2;
+            this.targetDirection.set(Math.cos(angle), 0, Math.sin(angle));
+        }
+    }
+
+    isValidObstacle(hit) {
+        if (!hit || !hit.collider) return false;
+        const colliderOwner = hit.collider.parent();
+        if (!colliderOwner) return false;
+
+        const hitObj = colliderOwner.userData?.instance;
+        return hitObj && hitObj !== this.gameScene.player && hitObj !== this;
+    }
+
+    calculateAvoidance(baseDir) {
+        if (!this.rigidBody) return { dir: baseDir, shouldJump: false };
+
+        const pos = this.rigidBody.translation();
+
+        const lowerOrigin = { x: pos.x, y: pos.y + 0.3, z: pos.z };
+        const upperOrigin = { x: pos.x, y: pos.y + 1.5, z: pos.z };
+
+        let vDir = new this.engine.THREE.Vector3(baseDir.x, 0, baseDir.z);
+        if (vDir.lengthSq() < 0.0001) vDir.set(0, 0, 1);
+        vDir.normalize();
+
+        let avoidDir = vDir.clone();
+        let hitSomething = false;
+        let shouldJump = false;
+
+        const forwardRayLow = new this.engine.rapier.Ray(lowerOrigin, { x: vDir.x, y: 0, z: vDir.z });
+        const forwardRayHigh = new this.engine.rapier.Ray(upperOrigin, { x: vDir.x, y: 0, z: vDir.z });
+
+        const hitLow = this.world.castRay(forwardRayLow, 3.0, true);
+        const hitHigh = this.world.castRay(forwardRayHigh, 3.0, true);
+
+        if (this.isValidObstacle(hitLow)) {
+            hitSomething = true;
+            if (!this.isValidObstacle(hitHigh) || hitHigh.toi > hitLow.toi + 1.0) {
+                if (hitLow.toi < 2.5) {
+                    shouldJump = true;
+                }
+            }
+        }
+
+        const angles = [0, -0.6, 0.6, -1.2, 1.2];
+        const rayLength = 4.0;
+
+        for (let angle of angles) {
+            const rayDir = vDir.clone().applyAxisAngle(new this.engine.THREE.Vector3(0, 1, 0), angle);
+            if (isNaN(rayDir.x)) continue;
+
+            const ray = new this.engine.rapier.Ray(lowerOrigin, { x: rayDir.x, y: 0, z: rayDir.z });
+            const hit = this.world.castRay(ray, rayLength, true);
+
+            if (this.isValidObstacle(hit)) {
+                hitSomething = true;
+                const force = Math.pow((rayLength - hit.toi) / rayLength, 2);
+                avoidDir.sub(rayDir.multiplyScalar(force * 3.5));
+            }
+        }
+
+        if (hitSomething && avoidDir.lengthSq() < 0.1) {
+            avoidDir = vDir.clone().applyAxisAngle(new this.engine.THREE.Vector3(0, 1, 0), Math.PI / 2);
+        }
+
+        return {
+            dir: hitSomething ? avoidDir.normalize() : vDir,
+            shouldJump: shouldJump
+        };
+    }
+
+    update(dt) {
+        super.update(dt);
+
+        if (this.engine.engine_mode !== "game") return;
+
+        const player = this.gameScene.player;
+        if (!player || player === "no-player" || !player.rigidBody) return;
+
+        const myPos = this.rigidBody.translation();
+        const playerPos = player.rigidBody.translation();
+        const currentVel = this.rigidBody.linvel();
+
+        const dx = playerPos.x - myPos.x;
+        const dz = playerPos.z - myPos.z;
+        const distToPlayer = Math.sqrt(dx * dx + dz * dz);
+
+        this.actionCooldown -= dt;
+        this.stateTimer -= dt;
+
+        let dirToPlayer = new this.engine.THREE.Vector3(0, 0, 0);
+        if (distToPlayer > 0.01) {
+            dirToPlayer.set(dx / distToPlayer, 0, dz / distToPlayer);
+        } else {
+            dirToPlayer.set(0, 0, 1);
+        }
+
+        let desiredSpeed = 0;
+
+        const horizSpeed = Math.sqrt(currentVel.x * currentVel.x + currentVel.z * currentVel.z);
+
+        if (this.state !== "idle" && this.state !== "attack" && this.state !== "jump" && horizSpeed < 0.5) {
+            this.stuckTimer += dt;
+        } else {
+            this.stuckTimer = 0;
+        }
+
+        if (this.stuckTimer > 0.5 && this.actionCooldown <= 0 && this.state !== "jump") {
+            this.state = "jump";
+            this.actionCooldown = 1.0;
+            this.stuckTimer = 0;
+            this.playAnim(this.anims.jump, 0.2);
+
+            this.rigidBody.applyImpulse({ x: dirToPlayer.x * 2, y: 12, z: dirToPlayer.z * 2 }, true);
+        }
+
+        if (this.state === "jump") {
+            if (currentVel.y <= 0 && this.actionCooldown < 0) {
+                this.state = "chase";
+                this.playAnim(this.anims.runs[0], 0.3);
+            }
+        }
+        else if (this.state === "investigate") {
+            desiredSpeed = 0;
+            if (this.stateTimer <= 0) this.pickRandomAction();
+        }
+        else if (this.state === "attack") {
+            desiredSpeed = 0;
+            if (this.stateTimer <= 0) this.state = "chase";
+        }
+        else {
+            if (distToPlayer > this.detectionDistance) {
+                if (this.stateTimer <= 0) this.pickRandomAction();
+                if (this.state === "wander") {
+                    desiredSpeed = this.walkSpeed;
+                    dirToPlayer.copy(this.targetDirection);
+                }
+            }
+            else if (distToPlayer > this.stalkDistance) {
+                this.state = "chase";
+                desiredSpeed = this.runSpeed * (this.aggressiveness > 0.5 ? 1.2 : 1.0);
+                if (!this.currentAction || !this.currentAction.getClip().name.includes('run')) {
+                    this.playRandomAnim(this.anims.runs, 0.4);
+                }
+
+                if (distToPlayer < 12 && distToPlayer > 8 && Math.random() < 0.01 && this.actionCooldown <= 0) {
+                    this.state = "jump";
+                    this.actionCooldown = 1.2;
+                    this.playAnim(this.anims.jump, 0.2);
+                    this.rigidBody.applyImpulse({ x: dirToPlayer.x * 12, y: 10, z: dirToPlayer.z * 12 }, true);
+                }
+            }
+            else if (distToPlayer > this.attackDistance) {
+                this.state = "stalk";
+                desiredSpeed = this.aggressiveness < 0.6 ? this.stalkSpeed : this.runSpeed;
+                const stalkAnim = this.aggressiveness < 0.6 ? this.anims.walks[1] : this.anims.runs[0];
+                if (!this.currentAction || this.currentAction.getClip().name !== stalkAnim) {
+                    this.playAnim(stalkAnim, 0.5);
+                }
+            }
+            else {
+                if (this.actionCooldown <= 0) {
+                    this.state = "attack";
+                    this.playRandomAnim(this.anims.attacks, 0.1);
+                    this.actionCooldown = 1.5;
+                    this.stateTimer = 0.8;
+                    player.rigidBody.applyImpulse({ x: dirToPlayer.x * 5, y: 0, z: dirToPlayer.z * 5 }, true);
+                }
+            }
+        }
+
+        if (this.state !== "jump" && this.state !== "attack") {
+            const avoidance = this.calculateAvoidance(dirToPlayer);
+            const finalDir = avoidance.dir;
+
+            if (avoidance.shouldJump && this.actionCooldown <= 0) {
+                this.state = "jump";
+                this.actionCooldown = 1.0;
+                this.playAnim(this.anims.jump, 0.2);
+
+                this.rigidBody.applyImpulse({
+                    x: finalDir.x * desiredSpeed * 1.5,
+                    y: 12,
+                    z: finalDir.z * desiredSpeed * 1.5
+                }, true);
+            }
+
+            if (!isNaN(finalDir.x) && isFinite(desiredSpeed) && this.state !== "jump") {
+                this.rigidBody.setLinvel({
+                    x: finalDir.x * desiredSpeed,
+                    y: currentVel.y,
+                    z: finalDir.z * desiredSpeed
+                }, true);
+
+                const targetAngle = Math.atan2(finalDir.x, finalDir.z);
+                const targetQuat = new this.engine.THREE.Quaternion().setFromAxisAngle(
+                    new this.engine.THREE.Vector3(0, 1, 0), targetAngle
+                );
+                const rbRot = this.rigidBody.rotation();
+                this.currentQuat.set(rbRot.x, rbRot.y, rbRot.z, rbRot.w);
+                this.currentQuat.slerp(targetQuat, Math.min(dt * this.turnSpeed, 1.0));
+                this.rigidBody.setRotation(this.currentQuat, true);
+            }
+        }
+    }
+}
+
+
+
+
+
+
+
+
 export class BoxInstance extends Instance {
     constructor(engine, gameScene, options = {}) {
         super(engine, gameScene);
         this.options = options;
         this.materialDef = this.engine.get_material(options.material || 'default');
-        
+
         this.size = options.scale ? { x: options.scale, y: options.scale, z: options.scale } : options.size ?? { x: 1, y: 1, z: 1 };
         this.position = options.position ?? { x: 0, y: 5, z: 0 };
         this.rotation = {
@@ -972,7 +1260,7 @@ export class BoxInstance extends Instance {
     _prepareMaterialForSide(sideName) {
         const sideUV = this.uvSettings[sideName] ?? { scale: { x: 1, y: 1 }, offset: { x: 0, y: 0 } };
         const mat = new this.engine.THREE.MeshStandardMaterial({ color: this.color });
-        
+
         if (this.materialDef.textures.diffuse) {
             const tex = this.engine.get_texture(this.materialDef.textures.diffuse).clone();
             tex.wrapS = tex.wrapT = this.engine.THREE.RepeatWrapping;
@@ -991,14 +1279,16 @@ export class BoxInstance extends Instance {
 
         this.object3D = new this.engine.THREE.Mesh(geo, mats);
         this.object3D.castShadow = this.object3D.receiveShadow = true;
+        this.object3D.rotation.set(this.rotation.x, this.rotation.y, this.rotation.z);
         this.scene.add(this.object3D);
 
         const rbDesc = this.static ? this.engine.rapier.RigidBodyDesc.fixed() : this.engine.rapier.RigidBodyDesc.dynamic();
-        rbDesc.setTranslation(this.position.x, this.position.y, this.position.z);
+        rbDesc.setTranslation(this.position.x, this.position.y, this.position.z)
+            .setRotation(this.object3D.quaternion);
         this.rigidBody = this.world.createRigidBody(rbDesc);
         this.rigidBody.userData = { instance: this };
 
-        const col = this.engine.rapier.ColliderDesc.cuboid(this.size.x/2, this.size.y/2, this.size.z/2)
+        const col = this.engine.rapier.ColliderDesc.cuboid(this.size.x / 2, this.size.y / 2, this.size.z / 2)
             .setFriction(this.materialDef.physics.friction)
             .setRestitution(this.materialDef.physics.restitution)
             .setDensity(this.materialDef.physics.density);
@@ -1015,7 +1305,7 @@ export class PlaneInstance extends Instance {
         super(engine, gameScene);
         this.options = options;
         this.materialDef = this.engine.get_material(options.material || 'default');
-        
+
         this.size = options.size ?? { x: 10, y: 10, z: 0.05 };
         this.position = options.position ?? { x: 0, y: 0, z: 0 };
         this.rotation = {
@@ -1031,7 +1321,7 @@ export class PlaneInstance extends Instance {
     init() {
         if (this.object3D) return;
         const geo = new this.engine.THREE.PlaneGeometry(this.size.x, this.size.y);
-        
+
         const uv = this.uvSettings.top || { scale: { x: 1, y: 1 }, offset: { x: 0, y: 0 } };
         const mat = new this.engine.THREE.MeshStandardMaterial({ color: this.color, side: this.engine.THREE.DoubleSide });
 
@@ -1051,12 +1341,12 @@ export class PlaneInstance extends Instance {
 
         const rbDesc = this.engine.rapier.RigidBodyDesc.fixed().setTranslation(this.position.x, this.position.y, this.position.z);
         rbDesc.setTranslation(this.position.x, this.position.y, this.position.z)
-          .setRotation(this.object3D.quaternion);
+            .setRotation(this.object3D.quaternion);
 
         this.rigidBody = this.world.createRigidBody(rbDesc);
         this.rigidBody.userData = { instance: this };
 
-        const col = this.engine.rapier.ColliderDesc.cuboid(this.size.x/2, this.size.y/2, (this.size.z ?? 0.05)/2);
+        const col = this.engine.rapier.ColliderDesc.cuboid(this.size.x / 2, this.size.y / 2, (this.size.z ?? 0.05) / 2);
         col.setFriction(this.materialDef.physics.friction).setRestitution(this.materialDef.physics.restitution);
         this.world.createCollider(col, this.rigidBody);
     }
@@ -2384,7 +2674,7 @@ export class Engine {
         this.blackHolePass.uniforms["bhPos"].value = new this.THREE.Vector3(0, 10, -20);
         this.blackHolePass.uniforms["cameraInverseViewProj"].value = new this.THREE.Matrix4();
         this.blackHolePass.uniforms["cameraViewProj"].value = new this.THREE.Matrix4();
-        this.blackHolePass.enabled = false; // Zkontroluj v GUI, zda je zapnuté PostProcessEnabled
+        this.blackHolePass.enabled = false;
         this.composer.addPass(this.blackHolePass);
 
 
@@ -2419,6 +2709,7 @@ export class Engine {
         this.pixelPass.uniforms["resolution"].value.set(this.width * this.dpr, this.height * this.dpr);
         this.pixelPass.uniforms["pixelSize"].value = 1.0;
         this.composer.addPass(this.pixelPass);
+        this.pixelPass.enabled = false;
 
 
         // Final
@@ -2432,6 +2723,7 @@ export class Engine {
             posteffectFolder.add(this, 'postProcessEnabled').name('Post-Process Enabled');
 
             const pixelFolder = posteffectFolder.addFolder('Pixel Effect');
+            pixelFolder.add(this.pixelPass, 'enabled').name('Enabled');
             pixelFolder.add(this.pixelPass.uniforms["pixelSize"], 'value', 1, 60, 1).name('Pixel Size');
             pixelFolder.close();
 
