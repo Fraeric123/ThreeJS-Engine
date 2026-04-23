@@ -1,7 +1,3 @@
-
-
-
-
 export const DEG2RAD = Math.PI / 180;
 
 
@@ -400,9 +396,9 @@ export class Player extends Instance {
         this.walkSpeed = 5;
         this.sprintSpeed = 20;
         this.crouchSpeed = 2.5;
-        this.jumpForce = 7;
+        this.jumpForce = 1.12;
 
-        this.radius = 0.4;
+        this.radius = 0.2;
         this.standHeight = 1.2;
         this.crouchHeight = 0.6;
         this.bobIntensity = 0;
@@ -489,18 +485,26 @@ export class Player extends Instance {
         const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
         this.isMoving = length > 0.1;
 
-        if (this.isMoving) {
-            this.rigidBody.setLinvel({
-                x: (moveX / length) * currentSpeed,
-                y: velocity.y,
-                z: (moveZ / length) * currentSpeed
-            }, true);
-
-            const speedFactor = isSprinting ? 1.5 : (this.isCrouching ? 0.6 : 1.0);
-            this.bobTime += dt * currentSpeed * speedFactor;
-        } else {
-            this.rigidBody.setLinvel({ x: 0, y: velocity.y, z: 0 }, true);
+        // OPRAVA: Kontrola setrvačnosti (momentum)
+        if (this._portalMomentum > 0) {
+            // Hráč právě vylétl z portálu – necháme na něj působit čistou fyziku
+            this._portalMomentum -= dt;
             this.bobTime += dt * this.walkSpeed;
+        } else {
+            // Běžný pohyb ovládaný hráčem (WASD)
+            if (this.isMoving) {
+                this.rigidBody.setLinvel({
+                    x: (moveX / length) * currentSpeed,
+                    y: velocity.y,
+                    z: (moveZ / length) * currentSpeed
+                }, true);
+
+                const speedFactor = isSprinting ? 1.5 : (this.isCrouching ? 0.6 : 1.0);
+                this.bobTime += dt * currentSpeed * speedFactor;
+            } else {
+                this.rigidBody.setLinvel({ x: 0, y: velocity.y, z: 0 }, true);
+                this.bobTime += dt * this.walkSpeed;
+            }
         }
 
         if (this.isMoving && Math.abs(velocity.y) < 0.1) {
@@ -1369,6 +1373,566 @@ export class PlaneInstance extends Instance {
 
 
 
+// ============================================================
+//  PORTAL SYSTEM
+// ============================================================
+
+export class PortalInstance extends Instance {
+    /**
+     * options:
+     *   position   { x, y, z }
+     *   normal     { x, y, z }  – směr, kterým portál "kouká"
+     *   color      0xffffff     – barva outlines (oranžová / modrá)
+     *   width      number       – šířka elipsy (default 1.0)
+     *   height     number       – výška elipsy (default 1.8)
+     *   static     bool         – jestli podléhá fyzice (default false)
+     */
+    constructor(engine, gameScene, options = {}) {
+        super(engine, gameScene, options);
+        this.options = options;
+        this.portalColor = options.color ?? 0xff6600;
+        this.portalWidth = options.width ?? 1.0;
+        this.portalHeight = options.height ?? 1.8;
+        this.isStatic = options.static ?? false;
+
+        this.position = options.position ?? { x: 0, y: 1, z: 0 };
+        const n = options.normal ?? { x: 0, y: 0, z: 1 };
+        // normalizace
+        const nLen = Math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z) || 1;
+        this.normal = { x: n.x / nLen, y: n.y / nLen, z: n.z / nLen };
+
+        this.linkedPortal = null;    // druhý portál v páru
+
+        // Three.js objekty
+        this.portalCamera = null;
+        this.renderTarget = null;
+        this.portalMesh = null;   // quad uvnitř elipsy
+        this.frameMesh = null;   // glow outline
+        this.innerMaterial = null;
+
+        // fyzika – sensor (passthrough collider)
+        this.sensorCollider = null;
+
+        // flicker animace při spawnu
+        this._spawnTime = performance.now();
+        this._spawnDuration = 0.4; // sekund
+
+        // settings ovládané z GUI
+        this.shaderEnabled = true;
+    }
+
+    // ----------------------------------------------------------
+    //  Pomocné metody – orientace portálu
+    // ----------------------------------------------------------
+    _buildQuaternion() {
+        const THREE = this.engine.THREE;
+        const normal = new THREE.Vector3(this.normal.x, this.normal.y, this.normal.z);
+        const up = Math.abs(normal.y) < 0.99
+            ? new THREE.Vector3(0, 1, 0)
+            : new THREE.Vector3(0, 0, 1);
+        const right = new THREE.Vector3().crossVectors(up, normal).normalize();
+        const realUp = new THREE.Vector3().crossVectors(normal, right).normalize();
+
+        const m = new THREE.Matrix4().makeBasis(right, realUp, normal);
+        return new THREE.Quaternion().setFromRotationMatrix(m);
+    }
+
+    // Vrátí matici transformace "skrz portál" – pro přesměrování kamery
+    _getPortalTransformMatrix(srcPortal, dstPortal) {
+        const THREE = this.engine.THREE;
+
+        const srcMat = new THREE.Matrix4().compose(
+            new THREE.Vector3(srcPortal.position.x, srcPortal.position.y, srcPortal.position.z),
+            srcPortal._buildQuaternion(),
+            new THREE.Vector3(1, 1, 1)
+        );
+        const dstMat = new THREE.Matrix4().compose(
+            new THREE.Vector3(dstPortal.position.x, dstPortal.position.y, dstPortal.position.z),
+            dstPortal._buildQuaternion(),
+            new THREE.Vector3(1, 1, 1)
+        );
+
+        // Otočíme 180° kolem osy Y v lokálním souřadném systému cílového portálu
+        const flip = new THREE.Matrix4().makeRotationY(Math.PI);
+        return new THREE.Matrix4()
+            .copy(dstMat)
+            .multiply(flip)
+            .multiply(srcMat.invert());
+    }
+
+    // ----------------------------------------------------------
+    //  Init
+    // ----------------------------------------------------------
+    init() {
+        if (this.object3D) return;
+        const THREE = this.engine.THREE;
+
+        // --- Portal RenderTarget ---
+        const w = this.engine.width || 1920;
+        const h = this.engine.height || 1080;
+        this.renderTarget = new THREE.WebGLRenderTarget(w, h);
+
+        // --- Portálová kamera ---
+        this.portalCamera = new THREE.PerspectiveCamera(
+            this.gameScene.camera.fov,
+            1.0,
+            0.1,
+            1000
+        );
+
+        // --- Vnitřní plocha portálu (quad s texture z renderTarget) ---
+        // Elipsa z CircleGeometry (dostatečně segmentů)
+        const innerGeo = new THREE.CircleGeometry(1, 48);
+        // Škálujeme na správný tvar – width/height
+        innerGeo.scale(this.portalWidth * 0.5, this.portalHeight * 0.5, 1);
+
+        // OPRAVA 3: Screen-Space Shader pro dokonalou iluzi okna
+        this.innerMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                tDiffuse: { value: this.renderTarget.texture }
+            },
+            vertexShader: `
+                varying vec4 vScreenPos;
+                void main() {
+                    vec4 pos = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    vScreenPos = pos;
+                    gl_Position = pos;
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D tDiffuse;
+                varying vec4 vScreenPos;
+                void main() {
+                    // Převedení z 3D do obrazovkových (Screen-Space) souřadnic
+                    vec2 uv = (vScreenPos.xy / vScreenPos.w) * 0.5 + 0.5;
+                    gl_FragColor = texture2D(tDiffuse, uv);
+                }
+            `,
+            side: THREE.DoubleSide,
+            depthWrite: false
+        });
+
+        this.portalMesh = new THREE.Mesh(innerGeo, this.innerMaterial);
+        this.portalMesh.renderOrder = 1;
+
+        // --- Outline (frame) – tenký prstenec ---
+        const outterGeo = new THREE.TorusGeometry(
+            Math.max(this.portalWidth, this.portalHeight) * 0.5,
+            0.06,
+            12,
+            48
+        );
+        // Škálujeme na elipsu
+        outterGeo.scale(this.portalWidth / Math.max(this.portalWidth, this.portalHeight),
+            this.portalHeight / Math.max(this.portalWidth, this.portalHeight), 1);
+
+        const frameMat = new THREE.MeshBasicMaterial({
+            color: this.portalColor,
+            transparent: true,
+            opacity: 1.0,
+            depthWrite: false
+        });
+        this.frameMesh = new THREE.Mesh(outterGeo, frameMat);
+        this.frameMesh.renderOrder = 2;
+
+        // --- Skupina ---
+        this.object3D = new THREE.Group();
+        this.object3D.add(this.portalMesh);
+        this.object3D.add(this.frameMesh);
+
+        const quat = this._buildQuaternion();
+        this.object3D.position.set(this.position.x, this.position.y, this.position.z);
+        this.object3D.quaternion.copy(quat);
+
+        this.scene.add(this.object3D);
+
+        // --- Physika – sensor collider (pro detekci průchodu) ---
+        const rbDesc = this.isStatic
+            ? this.engine.rapier.RigidBodyDesc.fixed()
+            : this.engine.rapier.RigidBodyDesc.dynamic();
+
+        rbDesc.setTranslation(this.position.x, this.position.y, this.position.z);
+        rbDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+
+        this.rigidBody = this.world.createRigidBody(rbDesc);
+        this.rigidBody.userData = { instance: this };
+
+        // Senzorový collider – průchod bez fyzikálního bouncu
+        const colDesc = this.engine.rapier.ColliderDesc
+            .cuboid(this.portalWidth * 0.5, this.portalHeight * 0.5, 0.12)
+            .setSensor(true);
+
+        this.sensorCollider = this.world.createCollider(colDesc, this.rigidBody);
+    }
+
+    // ----------------------------------------------------------
+    //  Spárování dvou portálů
+    // ----------------------------------------------------------
+    link(otherPortal) {
+        this.linkedPortal = otherPortal;
+        otherPortal.linkedPortal = this;
+    }
+
+    // ----------------------------------------------------------
+    //  Render – renderujeme pohled skrz portál do renderTarget
+    // ----------------------------------------------------------
+    renderPortalView(renderer, mainCamera, scene) {
+        if (!this.linkedPortal || !this.shaderEnabled) return;
+
+        const THREE = this.engine.THREE;
+        const portalTransform = this._getPortalTransformMatrix(this, this.linkedPortal);
+        const camWorld = mainCamera.matrixWorld.clone();
+        const newCamWorld = new THREE.Matrix4().multiplyMatrices(portalTransform, camWorld);
+
+        const pos = new THREE.Vector3();
+        const quat = new THREE.Quaternion();
+        const scale = new THREE.Vector3();
+        newCamWorld.decompose(pos, quat, scale);
+
+        this.portalCamera.position.copy(pos);
+        this.portalCamera.quaternion.copy(quat);
+        this.portalCamera.fov = mainCamera.fov;
+        this.portalCamera.aspect = mainCamera.aspect;
+
+        // OPRAVA 1: Malá vzdálenost near clipu
+        this.portalCamera.near = 0.05;
+        this.portalCamera.far = mainCamera.far;
+        this.portalCamera.updateProjectionMatrix();
+
+        this.linkedPortal.object3D.visible = false;
+
+        // OPRAVA 2: Vytvoření ořezové roviny (Clipping Plane)
+        // Definujeme rovinu na povrchu cílového portálu. Všechno fyzicky *za* portálem 
+        // (tedy překážející zeď, ve které je kamera) se z renderu pro tuto chvíli vymaže.
+        const dstNormal = new THREE.Vector3(this.linkedPortal.normal.x, this.linkedPortal.normal.y, this.linkedPortal.normal.z);
+        const dstPos = new THREE.Vector3(this.linkedPortal.position.x, this.linkedPortal.position.y, this.linkedPortal.position.z);
+        const clipPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(dstNormal, dstPos);
+        clipPlane.constant += 0.05; // Malá tolerance proti problikávání (Z-fighting)
+
+        const prevTarget = renderer.getRenderTarget();
+        const prevPlanes = renderer.clippingPlanes;
+        const prevLocalClipping = renderer.localClippingEnabled;
+
+        // Aktivace globálního ořezání
+        renderer.localClippingEnabled = true;
+        renderer.clippingPlanes = [clipPlane];
+
+        renderer.setRenderTarget(this.renderTarget);
+        renderer.clear();
+        renderer.render(scene, this.portalCamera);
+
+        // Návrat do původního stavu
+        renderer.setRenderTarget(prevTarget);
+        renderer.clippingPlanes = prevPlanes;
+        renderer.localClippingEnabled = prevLocalClipping;
+
+        this.linkedPortal.object3D.visible = true;
+    }
+
+    // ----------------------------------------------------------
+    //  Teleportace objektu přes portál
+    // ----------------------------------------------------------
+    tryTeleport(instance) {
+        if (!this.linkedPortal || !instance.rigidBody) return;
+
+        const THREE = this.engine.THREE;
+        const pos = instance.rigidBody.translation();
+        const vel = instance.rigidBody.linvel();
+
+        const toObj = new THREE.Vector3(pos.x - this.position.x, pos.y - this.position.y, pos.z - this.position.z);
+        const n = new THREE.Vector3(this.normal.x, this.normal.y, this.normal.z);
+
+        // 1. Zkontrolujeme, jestli jsme v elipse portálu
+        const distOnPlane = toObj.clone().projectOnPlane(n).length();
+        if (distOnPlane > Math.max(this.portalWidth, this.portalHeight) * 0.8) return;
+
+        // 2. Výpočet dynamického hitboxu (kapsle je na výšku větší než na šířku)
+        let hitThreshold = 0.45; // Defaultní tolerance pro zeď (radius hráče je 0.4)
+        if (instance.constructor.name.includes('Player')) {
+            // Zjistíme, jak moc je portál natočený nahoru/dolů (1 = podlaha/strop, 0 = zeď)
+            const alignment = Math.abs(n.y);
+            // Přechod mezi 0.45 (stěna) a 1.0 (podlaha)
+            hitThreshold = 0.45 + alignment * 0.55;
+        }
+
+        const distToPortal = toObj.dot(n);
+
+        // Zabrání teleportu, pokud jsme ještě moc daleko nebo už moc hluboko za portálem
+        if (distToPortal > hitThreshold + 0.1 || distToPortal < -0.2) return;
+
+        // Kontrola směru (aby nás to neteleportovalo hned zpět, když z portálu vylétáváme)
+        const velVec = new THREE.Vector3(vel.x, vel.y, vel.z);
+        if (velVec.dot(n) > 0.5) return;
+
+        // 3. Transformace (Matematika přechodu do druhého portálu)
+        const transform = this._getPortalTransformMatrix(this, this.linkedPortal);
+
+        // Rotace rychlosti (momentum vector)
+        const rotOnly = new THREE.Matrix4().extractRotation(transform);
+        const newVel = new THREE.Vector3(vel.x, vel.y, vel.z).applyMatrix4(rotOnly);
+
+        // Zrcadlení pozice a "pop-out" (aby hráč nezůstal viset ve zdi)
+        const dstNormal = new THREE.Vector3(this.linkedPortal.normal.x, this.linkedPortal.normal.y, this.linkedPortal.normal.z);
+        const newPos = new THREE.Vector3(pos.x, pos.y, pos.z).applyMatrix4(transform);
+
+        // Transformace hodila bod za zeď (kvůli flipu v matici), posuneme ho před cílový portál
+        newPos.add(dstNormal.clone().multiplyScalar(distToPortal * 2.0 + 0.1));
+
+        // 4. Fyzikální přesun (Rapier)
+        instance.rigidBody.setTranslation({ x: newPos.x, y: newPos.y, z: newPos.z }, true);
+
+        // Dodáme zachovanou rychlost + malý impuls po normále ven pro jistotu
+        instance.rigidBody.setLinvel({
+            x: newVel.x + dstNormal.x * 2.0,
+            y: newVel.y + dstNormal.y * 2.0,
+            z: newVel.z + dstNormal.z * 2.0
+        }, true);
+
+        if (instance.object3D) instance.object3D.position.copy(newPos);
+
+        // 5. Plně 3D rotace kamery (Pitch i Yaw)
+        if (instance === this.gameScene.player || instance.constructor.name.includes('Player')) {
+            const look = this.engine.look;
+
+            // Stávající vektor pohledu kamery
+            const camDir = new THREE.Vector3(
+                -Math.sin(look.yaw) * Math.cos(look.pitch),
+                Math.sin(look.pitch),
+                -Math.cos(look.yaw) * Math.cos(look.pitch)
+            );
+
+            // Otočíme pohled skrz portál
+            camDir.applyMatrix4(rotOnly);
+
+            // Získáme nové úhly hlavy
+            look.yaw = Math.atan2(-camDir.x, -camDir.z);
+            look.pitch = Math.asin(camDir.y);
+
+            // Omezovač pitch, aby si hráč nezlomil vaz (nepřetočil kameru vzhůru nohama)
+            look.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, look.pitch));
+
+            // Nastartujeme fyzikální setrvačnost (odpojí na chvíli WASD)
+            instance._portalMomentum = 0.3;
+        }
+
+        instance._portalCooldown = 0.5;
+    }
+
+    // ----------------------------------------------------------
+    //  Update
+    // ----------------------------------------------------------
+    update(dt) {
+        if (!this.object3D) return;
+
+        // Countdown cooldownu na instanci hráče
+        const player = this.gameScene.player;
+        if (player && player._portalCooldown > 0) {
+            player._portalCooldown -= dt;
+        }
+
+        // Flicker efekt při spawnu
+        const age = (performance.now() - this._spawnTime) / 1000;
+        if (age < this._spawnDuration) {
+            const t = age / this._spawnDuration;
+            const flicker = 0.5 + 0.5 * Math.sin(t * Math.PI * 8) * (1 - t);
+            if (this.frameMesh) this.frameMesh.material.opacity = flicker;
+            if (this.portalMesh) this.portalMesh.material.opacity = flicker;
+        } else {
+            if (this.frameMesh) {
+                // pulsující glow
+                const pulse = 0.85 + 0.15 * Math.sin(performance.now() * 0.004);
+                this.frameMesh.material.opacity = pulse;
+            }
+            if (this.portalMesh) this.portalMesh.material.opacity = this.shaderEnabled ? 1.0 : 0.3;
+        }
+
+        // Fyzický pohyb (pokud není static)
+        if (!this.isStatic) {
+            this.sync_with_physics();
+            const pos = this.rigidBody.translation();
+            const rot = this.rigidBody.rotation();
+            // aktualizujeme uloženou pozici/normal pro teleportaci
+            this.position = { x: pos.x, y: pos.y, z: pos.z };
+            // Přepočítáme normal z kvaternionu
+            const q = new this.engine.THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
+            const fwd = new this.engine.THREE.Vector3(0, 0, 1).applyQuaternion(q);
+            this.normal = { x: fwd.x, y: fwd.y, z: fwd.z };
+        }
+
+        // Teleportace hráče
+        if (this.linkedPortal && player && player.rigidBody && !(player._portalCooldown > 0)) {
+            this.tryTeleport(player);
+        }
+
+        super.update(dt);
+    }
+
+    destroy() {
+        if (this.renderTarget) { this.renderTarget.dispose(); this.renderTarget = null; }
+        if (this.innerMaterial) { this.innerMaterial.dispose(); }
+        super.destroy();
+    }
+}
+
+
+
+
+// ============================================================
+//  PORTAL GUN PLAYER
+// ============================================================
+
+export class PortalGunPlayer extends Player {
+    /**
+     * Hráč, který místo střelby projektilů umísťuje portály.
+     * LMB = oranžový portál, RMB = modrý portál.
+     */
+    constructor(engine, gameScene, options = {}) {
+        super(engine, gameScene, options);
+        this._orangePortal = null;
+        this._bluePortal = null;
+        this._shootCooldown = 0;
+        this._shootCooldownTime = 0.3; // sekund
+    }
+
+    init() {
+        super.init();
+
+        // Mouse listenery
+        this._onMouseDown = (e) => {
+            if (e.button === 0) this._shootPortal('orange');
+            if (e.button === 2) this._shootPortal('blue');
+        };
+        window.addEventListener('mousedown', this._onMouseDown);
+        window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        // GUI pro portálový shader
+        if (this.engine.gui) {
+            const folder = this.engine.gui.addFolder('Portal Gun');
+            folder.add(this, '_shootCooldownTime', 0.05, 2.0).name('Fire Rate (s)');
+
+            const shaderSettings = { shaderEnabled: true };
+            folder.add(shaderSettings, 'shaderEnabled')
+                .name('Portal Shader (projekce)')
+                .onChange((val) => {
+                    if (this._orangePortal) this._orangePortal.shaderEnabled = val;
+                    if (this._bluePortal) this._bluePortal.shaderEnabled = val;
+                });
+            folder.open();
+        }
+    }
+
+    _getShootDirection() {
+        const yaw = this.engine.look.yaw;
+        const pitch = this.engine.look.pitch;
+        return new this.engine.THREE.Vector3(
+            -Math.sin(yaw) * Math.cos(pitch),
+            Math.sin(pitch),
+            -Math.cos(yaw) * Math.cos(pitch)
+        );
+    }
+
+    _shootPortal(type) {
+        if (this._shootCooldown > 0) return;
+        this._shootCooldown = this._shootCooldownTime;
+
+        const THREE = this.engine.THREE;
+        const rapier = this.engine.rapier;
+
+        const camPos = this.engine.activeScene.camera.position;
+        const dir = this._getShootDirection();
+
+        const ray = new rapier.Ray(
+            { x: camPos.x, y: camPos.y, z: camPos.z },
+            { x: dir.x, y: dir.y, z: dir.z }
+        );
+
+        // 2. USE castRayAndGetNormal instead of castRay
+        // Note: Standard Rapier API uses: ray, maxToi, solid, groups, filter
+        // engine.js -> PortalGunPlayer._shootPortal
+        const hit = this.world.castRayAndGetNormal(
+            ray,
+            100,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            (collider) => {
+                // 1. Ignorovat senzory (ostatní portály)
+                if (collider.isSensor()) return false;
+                // 2. Ignorovat sám sebe (hráče)
+                if (collider.parent() === this.rigidBody) return false;
+                return true;
+            }
+        );
+        if (!hit) return;
+
+        // Bod dopadu
+        const toi = hit.timeOfImpact;
+        const hitPos = {
+            x: camPos.x + dir.x * toi,
+            y: camPos.y + dir.y * toi,
+            z: camPos.z + dir.z * toi,
+        };
+
+        // Normála povrchu – odhadneme z geometrie (Rapier toi + direction flip)
+        // Přesná normála z Rapieru
+        const hitNormal = hit.normal;
+        const normal = { x: hitNormal.x, y: hitNormal.y, z: hitNormal.z };
+
+        // Posuneme portál od povrchu aby neklipal
+        hitPos.x += normal.x * 0.05;
+        hitPos.y += normal.y * 0.05;
+        hitPos.z += normal.z * 0.05;
+
+        const color = type === 'orange' ? 0xff7700 : 0x0099ff;
+        const idName = `portal_${type}`;
+
+        // Odstraníme starý portál stejného typu
+        const existing = type === 'orange' ? this._orangePortal : this._bluePortal;
+        if (existing) {
+            // Zrušit link
+            if (existing.linkedPortal) existing.linkedPortal.linkedPortal = null;
+            this.gameScene.remove_instance(idName);
+        }
+
+        const portal = this.gameScene.add_instance(idName, PortalInstance, {
+            position: hitPos,
+            normal,
+            color,
+            static: true,
+            width: 1.0,
+            height: 1.8
+        });
+
+        if (type === 'orange') {
+            this._orangePortal = portal;
+        } else {
+            this._bluePortal = portal;
+        }
+
+        // Propojíme oba portály pokud oba existují
+        if (this._orangePortal && this._bluePortal) {
+            this._orangePortal.link(this._bluePortal);
+        }
+    }
+
+    update(dt) {
+        super.update(dt);
+        if (this._shootCooldown > 0) this._shootCooldown -= dt;
+    }
+
+    destroy() {
+        super.destroy();
+        if (this._onMouseDown) {
+            window.removeEventListener('mousedown', this._onMouseDown);
+        }
+    }
+}
+
+
+
+
 export class GameScene {
     constructor(engine) {
         this.engine = engine;
@@ -1604,6 +2168,31 @@ export class GameScene {
     }
 
     render(alpha, renderDt) {
+        // --- Portal pre-render (render pohledu skrz portály do jejich renderTargetů) ---
+        for (const instance of this.instances.values()) {
+            if (instance instanceof PortalInstance && instance.linkedPortal) {
+                instance.renderPortalView(
+                    this.engine.renderer,
+                    this.camera,
+                    this.scene
+                );
+            }
+        }
+
+        // --- Portal outline pulsování ---
+        const portalTime = performance.now() * 0.006;
+        for (const instance of this.instances.values()) {
+            if (instance instanceof PortalInstance && instance.frameMesh) {
+                const p = 0.85 + 0.15 * Math.sin(portalTime + (instance.portalColor === 0xff7700 ? 0 : Math.PI));
+                instance.frameMesh.material.opacity = p;
+
+                // Přidáme frame do outlinePass pokud existuje
+                if (this.engine.outlinePass && !this.engine.outlinePass._portalFrames) {
+                    this.engine.outlinePass._portalFrames = true;
+                }
+            }
+        }
+
         if (this.engine.outlinePass) {
             const time = performance.now() * 0.007;
             const pulse = 4.0 + Math.sin(time) * 1.0;
@@ -1703,6 +2292,38 @@ export class GameScene {
         if (Math.abs(this.camera.fov - this.targetFOV) > 0.1) {
             this.camera.fov = this.engine.THREE.MathUtils.lerp(this.camera.fov, this.targetFOV, 0.15);
             this.camera.updateProjectionMatrix();
+        }
+
+        // Portálové frame meshe vždy v outlinePass (nezávisle na raycastu)
+        if (this.engine.outlinePass) {
+            const portalFrames = [];
+            for (const instance of this.instances.values()) {
+                if (instance instanceof PortalInstance && instance.frameMesh) {
+                    portalFrames.push(instance.frameMesh);
+                }
+            }
+            if (portalFrames.length > 0) {
+                this.engine.outlinePass.enabled = true;
+                // Nastavíme barvu outlines dynamicky podle portálu
+                // Použijeme multi-color trick – jeden pass, oranžová + modrá se střídají
+                this.engine.outlinePass.selectedObjects = portalFrames;
+
+                // Separátní outline passes pro každý portál (různé barvy)
+                if (this._portalOutlinePassOrange && this._portalOutlinePassBlue) {
+                    const oFrames = [], bFrames = [];
+                    for (const instance of this.instances.values()) {
+                        if (instance instanceof PortalInstance && instance.frameMesh) {
+                            if (instance.portalColor === 0xff7700) oFrames.push(instance.frameMesh);
+                            else bFrames.push(instance.frameMesh);
+                        }
+                    }
+                    this._portalOutlinePassOrange.selectedObjects = oFrames;
+                    this._portalOutlinePassBlue.selectedObjects = bFrames;
+                    this._portalOutlinePassOrange.enabled = oFrames.length > 0;
+                    this._portalOutlinePassBlue.enabled = bFrames.length > 0;
+                    // Hlavní outlinePass necháme pro raycasting
+                }
+            }
         }
 
         if (this.debugEnabled) {

@@ -51,7 +51,8 @@
             PlaneInstance,
             FPSPlayer,
             Material,
-            Indoraptor
+            Indoraptor,
+            PortalGunPlayer
         } from './engine.js';
 
         const engine = new Engine({
@@ -108,7 +109,7 @@
         }).then(() => {
             const gameScene = engine.add_scene("game", GameScene);
 
-            gameScene.add_instance("player", FPSPlayer, {
+            gameScene.add_instance("player", PortalGunPlayer, {
                 position: { x: 0, y: 0.5, z: 0 }
             });
 
@@ -230,13 +231,13 @@
                 colliderType: "shape_from_model"
             });
 
-            gameScene.add_instance("indo", Indoraptor, {
-                model: "indoraptor",
-                position: { x: 10, y: 2, z: 10 },
-                offsetZ: -0.5,
-                runSpeed: 8,
-                attackDistance: 3
-            });
+            //gameScene.add_instance("indo", Indoraptor, {
+            //    model: "indoraptor",
+            //    position: { x: 10, y: 2, z: 10 },
+            //    offsetZ: -0.5,
+            //    runSpeed: 8,
+            //    attackDistance: 3
+            //});
 
             gameScene.set_hdri("hdri", 1);
 
