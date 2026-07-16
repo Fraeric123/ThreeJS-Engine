@@ -21,24 +21,26 @@
 
 <body>
     <script type="module">
-        import RAPIER from './libs/rapier.js';
-        import * as THREE from './libs/three.module.js';
-        import Stats from './libs/stats.module.js';
-        import { GLTFLoader } from './libs/GLTFLoader.js';
-        import { clone } from './libs/SkeletonUtils.js';
-        import { RGBELoader } from './libs/RGBELoader.js';
-        import GUI from './libs/lilgui.js';
 
-        import { ShaderPass } from './libs/postprocessing/ShaderPass.js';
-        import { EffectComposer } from './libs/postprocessing/EffectComposer.js';
-        import { RenderPass } from './libs/postprocessing/RenderPass.js';
+        import RAPIER         from './libs/rapier.js';
+        import * as THREE     from './libs/three.module.js';
+        import Stats          from './libs/stats.module.js';
+        import { GLTFLoader } from './libs/GLTFLoader.js';
+        import { clone }      from './libs/SkeletonUtils.js';
+        import { RGBELoader } from './libs/RGBELoader.js';
+        import GUI            from './libs/lilgui.js';
+         
+        import { ShaderPass }      from './libs/postprocessing/ShaderPass.js';
+        import { EffectComposer }  from './libs/postprocessing/EffectComposer.js';
+        import { RenderPass }      from './libs/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from './libs/postprocessing/UnrealBloomPass.js';
-        import { OutputPass } from './libs/postprocessing/OutputPass.js';
-        import { BokehPass } from './libs/postprocessing/BokehPass.js';
-        import { GTAOPass } from './libs/postprocessing/GTAOPass.js';
-        import { SMAAPass } from './libs/postprocessing/SMAAPass.js';
-        import { OutlinePass } from './libs/postprocessing/OutlinePass.js';
-        import { TAARenderPass } from './libs/postprocessing/TAARenderPass.js';
+        import { OutputPass }      from './libs/postprocessing/OutputPass.js';
+        import { BokehPass }       from './libs/postprocessing/BokehPass.js';
+        import { GTAOPass }        from './libs/postprocessing/GTAOPass.js';
+        import { SMAAPass }        from './libs/postprocessing/SMAAPass.js';
+        import { OutlinePass }     from './libs/postprocessing/OutlinePass.js';
+        import { TAARenderPass }   from './libs/postprocessing/TAARenderPass.js';
+ 
 
         import {
             RandomHexColor,
@@ -75,34 +77,34 @@
             TAARenderPass: TAARenderPass
         });
 
-        engine.add_texture("wood_diffuse", "./gfx/wood_diffuse.jpg");
-        engine.add_texture("wood_metal", "./gfx/wood_metal.jpg");
-        engine.add_texture("wood_normal", "./gfx/wood_normal.jpg");
-        engine.add_texture("wood_rough", "./gfx/wood_rough.jpg");
+        engine.add_texture("wood_diffuse", "./gfx/wood_diffuse.jpg")
+            .add_texture("wood_metal", "./gfx/wood_metal.jpg")
+            .add_texture("wood_normal", "./gfx/wood_normal.jpg")
+            .add_texture("wood_rough", "./gfx/wood_rough.jpg")
 
-        engine.add_sound("test_sound", "./sfx/wood_collision_1.wav");
+            .add_sound("test_sound", "./sfx/wood_collision_1.wav")
 
-        engine.add_material(new Material("test_wood", {
-            diffuse: "wood_diffuse",
-            normal: "wood_normal",
-            roughness: "wood_rough",
-            metalness: "wood_metal",
+            .add_material(new Material("test_wood", {
+                diffuse: "wood_diffuse",
+                normal: "wood_normal",
+                roughness: "wood_rough",
+                metalness: "wood_metal",
 
-            friction: 0.5,
-            restitution: 0.2,
-            density: 1.0,
+                friction: 0.5,
+                restitution: 0.2,
+                density: 1.0,
 
-            impactSound: "test_sound",
-            breakSound: "test_sound",
-            scrapeSound: "test_sound",
-            stepSound: "test_sound",
-        }));
+                impactSound: "test_sound",
+                breakSound: "test_sound",
+                scrapeSound: "test_sound",
+                stepSound: "test_sound",
+            }))
 
-        engine.add_hdri("hdri", "./hdr/day.hdr");
-
-        engine.add_model("indoraptor", "./glb/indoraptor.glb");
-        engine.add_model("henry", "./glb/henry.glb");
-        engine.add_model("tv", "./glb/tv.glb")
+            .add_hdri("hdri", "./hdr/day.hdr")
+            
+            .add_model("indoraptor", "./glb/indoraptor.glb")
+            .add_model("henry", "./glb/henry.glb")
+            .add_model("tv", "./glb/tv.glb")
 
         engine.init({
             display_mode: 'normal_canvas'
@@ -230,14 +232,6 @@
                 scale: 2,
                 colliderType: "shape_from_model"
             });
-
-            //gameScene.add_instance("indo", Indoraptor, {
-            //    model: "indoraptor",
-            //    position: { x: 10, y: 2, z: 10 },
-            //    offsetZ: -0.5,
-            //    runSpeed: 8,
-            //    attackDistance: 3
-            //});
 
             gameScene.set_hdri("hdri", 1);
 

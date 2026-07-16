@@ -37,7 +37,42 @@ export class Material {
 }
 
 
+/*
+engine values
+- engine
+- gameScene
+- scene
+- world
+- id
+- name
+- tags: []
 
+instance callbacks
+- onStart()
+- onLateUpdate(dt)
+- onRender()
+- onInit(instance)
+- onUpdate(instance, dt)
+- onDestroy(instance)
+- onCollide(selfInstance, otherInstance, collisionForce)
+
+instance visuals
+- object3D (Three.js Mesh or Group)
+- rigidBody (Rapier RigidBody)
+- brick_color (for simple color-based materials)
+- materialDef (reference to material properties, including physics and sounds)
+
+physics values
+- position (x, y, z)
+- rotation (x, y, z in radians or as a quaternion)
+- velocity (x, y, z)
+- angularVelocity (x, y, z)
+- mass
+- friction
+- restitution
+- density
+- static (boolean, if true, object is immovable and unaffected by forces)
+*/
 
 
 export class Instance {
@@ -50,6 +85,7 @@ export class Instance {
         this.onInit = options.onInit || null;
         this.onUpdate = options.onUpdate || null;
         this.onDestroy = options.onDestroy || null;
+        this.onCollide = options.onCollide || null;
 
         this.object3D = null;
         this.rigidBody = null;
@@ -3457,22 +3493,27 @@ export class Engine {
 
     add_texture(name, path) {
         this.assets.textures.set(name, path);
+        return this
     }
 
     add_model(name, path) {
         this.assets.models.set(name, path);
+        return this
     }
 
     add_hdri(name, path) {
         this.assets.hdris.set(name, path);
+        return this
     }
 
     add_sound(name, path) {
         this.assets.sounds.set(name, path);
+        return this
     }
 
     add_material(material) {
         this.assets.materials.set(material.name, material);
+        return this
     }
 
     get_number_of_textures() {
